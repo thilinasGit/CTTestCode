@@ -1,0 +1,255 @@
+#include <MovingAverage.h>
+MovingAverage<float> avrVpp(5,0);
+
+const int adcPin = 35;
+const int vppBuffSize = 25;
+int adcValues[vppBuffSize];
+const int edgeBuffSize = 10;
+float vppBuffer[edgeBuffSize];
+int currentIndex=0,bufferIndex;
+bool accumulateAreaFlag=false;
+double accumulatedArea,trainnedArea;
+float autoModeTollerence=0.1;
+float threshold; 
+float difference=0.2;
+float upperTrigger=0.6;
+float lowerTrigger=0.4;
+int c;
+float v; //// Keeps the scale constant in arduino serial plot
+float idleVpp;
+const int button=21;
+unsigned long startTimestamp=0,risingEdgeTimestamp=0,fallingEdgeTimestamp=0;
+unsigned long needleDownTime=0;
+unsigned long previousButtonTs=0;
+bool awaitStart=1,awaitButtonPress=false;
+int pieceCount=0,risingEdgeCount=0, fallingEdgeCount=0;
+int lastEdge=0;
+bool autoCountMode=1;
+int buttonPressCount=0;
+unsigned long savedNDT;   /// use eeprom
+
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(button, INPUT_PULLUP);
+  pinMode(adcPin, INPUT);
+  Serial.begin(115200);
+ 
+
+  delay(2000);
+}
+
+
+void loop() {
+  
+  if(digitalRead(button)==0){
+
+    buttonPressCount++;    
+    delay(10);
+    awaitStart=1;
+    if(awaitButtonPress){
+      pieceCount++;                //// piece count approves only after pretrained area is reached
+      awaitButtonPress=0;}
+    else if(buttonPressCount==2) pieceCount++;    /// Take trainning piece as 1st count
+
+    printStats();
+    savedNDT=needleDownTime;
+    trainnedArea=accumulatedArea-(accumulatedArea*autoModeTollerence);
+    resetCounters();   /// reset at last
+    previousButtonTs=millis();
+
+    while(digitalRead(button)==0){delay(10);}  // 
+  }
+
+  pushToBuffer(getVpp());
+
+  //accumulate area
+  if(accumulateAreaFlag){
+    float cVpp= avrVpp.get()- idleVpp;
+    if(cVpp<0)cVpp=0;
+    accumulatedArea+=cVpp;
+    digitalWrite(LED_BUILTIN,HIGH);
+  } else digitalWrite(LED_BUILTIN,LOW);       /// operation traking is indicated by led
+
+  // Print peak-to-peak voltage
+  Serial.print(avrVpp.get());
+  Serial.print(" ");
+ 
+  //// check rising edge or falling edge 
+  int currentEdge=getEdge();
+  float edgeSignal=(0.05*(float) currentEdge)+0.15;    //// Not important 
+  Serial.print(edgeSignal);
+  Serial.print(" ");
+  Serial.println(v);
+
+  if(currentEdge==-1){    /// triggers on a falling edge and caluculate the needledown time
+    fallingEdgeCount++;
+    fallingEdgeTimestamp=millis();
+    accumulateAreaFlag=false;
+    needleDownTime+=(fallingEdgeTimestamp-risingEdgeTimestamp); 
+  } else if(currentEdge==1){
+      risingEdgeCount++;
+      accumulateAreaFlag=true;
+      risingEdgeTimestamp=millis();
+      if(awaitStart){
+      startTimestamp=risingEdgeTimestamp;
+      awaitStart=0;
+      
+    }
+        }
+
+  // if(autoCountMode&&buttonPressCount>=2){
+  //   if(needleDownTime>savedNDT){ 
+  //       pieceCount++;       
+  //       printStats();
+  //       needleDownTime=0;        
+  //       awaitStart=1;
+  //       resetCounters();
+  //   }
+  // }
+
+ if(accumulatedArea>trainnedArea&&buttonPressCount>=2)
+  if(autoCountMode){   
+        pieceCount++;       
+        printStats();
+        accumulatedArea=0;        
+        awaitStart=1;
+        resetCounters();
+    } else awaitButtonPress=true;
+
+
+  if(c%5==0){
+    if(v==0)v=0.3;
+    else v=0;
+  }
+  // Reset counter
+  c++;
+  if (c == 100) {
+    c = 0;
+  }
+}
+
+
+int getEdge() {
+    float minVal = vppBuffer[0];
+    float maxVal = vppBuffer[0];
+    int maxIndex=0,minIndex=0;
+    
+    // Find minimum and maximum values in the vppBuffer
+    for (int i = 0; i < edgeBuffSize; i++) {
+        if (vppBuffer[i] < minVal) {
+            minVal = vppBuffer[i];
+            minIndex=i;
+
+        }
+        if (vppBuffer[i] > maxVal) {
+            maxVal = vppBuffer[i];
+            maxIndex=i;
+        }
+    }
+    
+    int currentEdge=0;
+    // Check for rising edge
+    if(avrVpp.get()>upperTrigger)currentEdge= 1;    
+    else if (avrVpp.get()<lowerTrigger) currentEdge= -1;
+    else  if (maxVal - minVal > difference) {
+      if (minIndex<maxIndex) {       ////    ....../""""""   Rising edge        
+        currentEdge= 1;
+
+      } else {                     ////     """"""\.....     falling edge          
+          currentEdge= -1;    
+
+        }
+      
+     if(currentEdge==lastEdge)return 0;    /// single broadcast
+     else {
+      lastEdge=currentEdge;
+      return currentEdge;
+     }
+
+    } else
+      return 0;                   // Flat
+
+
+}
+
+float getVpp(){
+   // Read ADC values into buffer
+  for (int i = 0; i < vppBuffSize; i++) {
+    adcValues[i] = analogRead(adcPin);
+    delay(2); // Adjust delay as needed based on sampling frequency
+  }
+
+  // Find maximum and minimum values in buffer
+  int maxVal = adcValues[0];
+  int minVal = adcValues[0];
+  for (int i = 1; i < vppBuffSize; i++) {
+    if (adcValues[i] > maxVal) {
+      maxVal = adcValues[i];
+    }
+    if (adcValues[i] < minVal) {
+      minVal = adcValues[i];
+    }
+  }
+
+  // Calculate peak-to-peak voltage
+  float vpp = ((maxVal - minVal) / 4095.0) * 3.3; // Assuming 12-bit ADC and 3.3V reference voltage
+  avrVpp.push(vpp);
+  return avrVpp.get();
+}
+
+void pushToBuffer(float value) {
+    // If the buffer is full, shift values left
+    if (currentIndex == edgeBuffSize) {
+        // Shift values left by one position
+        for (int i = 1; i < edgeBuffSize; i++) {
+            vppBuffer[i - 1] = vppBuffer[i];
+        }
+        // Add the new value at the end
+        vppBuffer[edgeBuffSize - 1] = value;
+    } else {
+        // If buffer is not full, simply add the value
+        vppBuffer[currentIndex] = value;
+        currentIndex++;
+    }
+}
+
+int getTotalDuration() {
+  unsigned long opTime = millis() - previousButtonTs;
+  return (int) (opTime / 1000); // Ensure proper division by using an unsigned long constant
+}
+
+
+int getIdleDuration(){
+ return getTotalDuration()- (int) (needleDownTime/1000);
+}
+
+void resetCounters(){
+    needleDownTime=0;
+    risingEdgeCount=0;
+    fallingEdgeCount=0;
+    accumulatedArea=0;
+}
+
+void printStats(){
+    Serial.println("------Statistics------");
+    Serial.print("\nPiece count-");
+    Serial.print(pieceCount);
+    Serial.print("\nNeedle DownTime-");
+    Serial.print(needleDownTime);
+    Serial.print("ms\nIdle Duration-");
+    Serial.print(getIdleDuration());
+    Serial.print("s\nTotal Duration- ");    
+    Serial.print(getTotalDuration());
+    Serial.print("s\nStart timestamp-");
+    Serial.print(startTimestamp);
+    Serial.print("ms\nEnd timestamp-");
+    Serial.print(fallingEdgeTimestamp);
+    Serial.print("ms\nRising edge count-");
+    Serial.print(risingEdgeCount);
+    Serial.print("\nFalling edge count-");
+    Serial.print(fallingEdgeCount);
+    Serial.print("\nAccumulated Area-");
+    Serial.print(accumulatedArea);
+    Serial.println("\n--------------------");
+    delay(5000);
+}
