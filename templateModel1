@@ -1,0 +1,153 @@
+#include "ACS712.h"
+#include <MovingAverage.h>
+MovingAverage<float> avrVpp(5, 0); 
+
+// Vrms object
+
+
+// Define constants
+const int adcPin = 35;  // ADC input pin for ESP32 (change as needed)
+const int buttonPin = 21;  // Pin for button to trigger training mode
+const int samplingRate = 50;  // Sampling rate in Hz
+const int pulseLength = 50;  // Length of pulse data (in samples)
+const float detectionThreshold = 0.9;  // Correlation threshold for detection
+
+// Arrays to store pulse shape data
+int referencePulse[pulseLength];  // Reference pulse shape
+int currentPulse[pulseLength];  // Current pulse FIFO buffer
+int pulseIndex = 0;  // Index for circular buffer
+
+// Button state
+bool isTrainingMode = 1;  // Indicates if we're capturing a reference pulse
+ACS712  ACS(35, 3.3, 4095, 185);
+
+  
+// }
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(adcPin, INPUT);
+  pinMode(LED_BUILTIN,OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);  // Use pull-up resistor for the button
+  memset(referencePulse, 0, pulseLength * sizeof(int));
+}
+
+void loop() {
+  //avrVpp.push();
+  
+  if (!digitalRead(buttonPin)) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(2000);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(100);
+    digitalWrite(LED_BUILTIN, HIGH);
+    captureReferencePulse();
+    isTrainingMode = false;  // Exit training mode after capturing
+    digitalWrite(LED_BUILTIN, LOW);
+    //Serial.println("Reference pulse captured.");
+    dumpRefPulse();
+  } else {
+    // Perform pattern matching when not in training mode
+    captureCurrentPulse((int)ACS.mA_AC());  // Update FIFO buffer with new ADC reading
+    float correlationScore = crossCorrelation(referencePulse, currentPulse, pulseLength, pulseIndex);
+
+
+    if (correlationScore >= detectionThreshold) {
+      //Serial.println("Pulse detected!");
+      digitalWrite(LED_BUILTIN, HIGH);
+      dumpMatchedPulse();
+      memset(currentPulse, 0, pulseLength);
+      delay(599);
+      digitalWrite(LED_BUILTIN, HIGH);
+      
+    }
+  }
+
+  delay(1000 / samplingRate);  // Maintain sampling rate
+}
+
+void captureReferencePulse() {
+  // Capture and store reference pulse data
+  for (int i = 0; i < pulseLength; i++) {
+    referencePulse[i] = (int) ACS.mA_AC();
+    //Serial.println(referencePulse[i]);
+    delay(1000 / samplingRate);
+  }
+}
+
+void captureCurrentPulse(int vpp) {
+  // Circular buffer implementation for current pulse data
+  currentPulse[pulseIndex] = vpp;
+  //Serial.println(currentPulse[pulseIndex]);
+  pulseIndex = (pulseIndex + 1) % pulseLength;  // Move to the next index in the circular buffer
+}
+
+float crossCorrelation(int signal1[], int signal2[], int length, int startIndex) {
+  long long mean1 = 0, mean2 = 0;
+  for (int i = 0; i < length; i++) {
+    mean1 += signal1[i];
+    mean2 += signal2[(i + startIndex) % length]; // Adjust index for circular buffer
+  }
+  mean1 /= length;
+  mean2 /= length;
+
+  long long numerator = 0, denominator1 = 0, denominator2 = 0;
+  for (int i = 0; i < length; i++) {
+    int adjustedIndex = (i + startIndex) % length; // Adjust index for circular buffer
+    numerator += (signal1[i] - mean1) * (signal2[adjustedIndex] - mean2);
+    denominator1 += (signal1[i] - mean1) * (signal1[i] - mean1);
+    denominator2 += (signal2[adjustedIndex] - mean2) * (signal2[adjustedIndex] - mean2);
+  }
+
+  if (denominator1 == 0 || denominator2 == 0) return 0.0;  // Avoid division by zero
+  return numerator / sqrt(denominator1 * denominator2);  // Correlation coefficient
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+///////////  ONlY  FOR TESTING PURPOSE
+
+
+void dumpRefPulse() {
+  Serial.print("Reference pulse data: ");
+  for (int i = 0; i < pulseLength; i++) {
+    Serial.print(referencePulse[i]);
+    Serial.print(" ");
+    Serial.println(0);
+    //if(i%10==0)Serial.println("");
+  }
+  Serial.println();  // New line after printing all data
+}
+
+void dumpMatchedPulse() {
+  Serial.print("Matched pulse data: ");
+  for (int i = 0; i < pulseLength; i++) {
+    int index = (pulseIndex + i) % pulseLength;  // Correct index for circular buffer
+    Serial.print(referencePulse[i]);
+    Serial.print(" ");
+    Serial.println(currentPulse[(i + pulseIndex) % pulseLength]);
+    
+    //Serial.print(" ");  // Separate values with a space
+    //if(i%10==0)Serial.println("");
+  }
+  Serial.println();  // New line after printing all data
+}
