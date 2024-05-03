@@ -1,0 +1,152 @@
+#include "ACS712.h"
+#include <MovingAverage.h>
+#include <vector>
+
+MovingAverage<float> avrVpp(5, 0); 
+
+std::vector<int> pulseBuffer;
+
+// Define constants
+const int adcPin = 35;  // ADC input pin for ESP32 (change as needed)
+const int buttonPin = 21;  // Pin for button to trigger training mode
+const int samplingRate = 50;  // Sampling rate in Hz
+ int pulseLength = 50;  // Length of pulse data (in samples)
+const float detectionThreshold = 0.9;  // Correlation threshold for detection
+
+// Vectors to store pulse shape data
+std::vector<int> referencePulse(pulseLength);  // Reference pulse shape
+std::vector<int> currentPulse(pulseLength);  // Current pulse FIFO buffer
+int pulseIndex = 0;  // Index for circular buffer
+
+// Button state
+bool isTrainingMode = 1;  // Indicates if we're capturing a reference pulse
+ACS712  ACS(35, 3.3, 4095, 185);
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(adcPin, INPUT);
+  pinMode(LED_BUILTIN,OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);  // Use pull-up resistor for the button
+}
+
+void loop() {
+  //avrVpp.push();
+  
+  if (!digitalRead(buttonPin)) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(2000);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(100);
+    digitalWrite(LED_BUILTIN, HIGH);
+    captureReferencePulse();
+    isTrainingMode = false;  // Exit training mode after capturing
+    digitalWrite(LED_BUILTIN, LOW);
+    dumpRefPulse();
+  } else {
+    // Perform pattern matching when not in training mode
+    captureCurrentPulse((int)ACS.mA_AC());  // Update FIFO buffer with new ADC reading
+    float correlationScore = crossCorrelation(referencePulse, currentPulse, pulseIndex);
+
+
+    if (correlationScore >= detectionThreshold) {
+      digitalWrite(LED_BUILTIN, HIGH);
+      dumpMatchedPulse();
+      currentPulse.clear(); // Clear the current pulse buffer
+      currentPulse.resize(pulseLength); // Resize it to the original length
+      delay(599);
+      digitalWrite(LED_BUILTIN, LOW);
+    }
+  }
+
+  delay(1000 / samplingRate);  // Maintain sampling rate
+}
+
+void captureReferencePulse() {
+  std::vector<int> tempBuffer(pulseLength); // Temporary buffer to hold the captured data
+  std::fill(tempBuffer.begin(), tempBuffer.end(), 0); // Initialize tempBuffer to 0
+  Serial.println(pulseLength);
+  // Capture and store reference pulse data
+  for (int i = 0; i < pulseLength; i++) {
+    tempBuffer[i] = (int) ACS.mA_AC();
+    delay(1000 / samplingRate);
+  }
+
+  // Find the start and end indices of the pulse using a threshold
+  int threshold = 150; // Adjust threshold as needed
+  int startIdx = 0;
+  int endIdx = pulseLength - 1;
+  for (int i = 0; i < pulseLength; i++) {
+    if (tempBuffer[i] > threshold) {
+      startIdx = std::max(0, i - 1); // i-x  Include x values before the pulse boundary
+      break;
+    }
+  }
+  for (int i = pulseLength - 1; i >= 0; i--) {
+    if (tempBuffer[i] > threshold) {
+      endIdx = std::min(pulseLength - 1, i +1); // i+x  Include x values after the pulse boundary
+      break;
+    }
+  }
+
+  // Resize referencePulse to accommodate the pulse and boundary values
+  pulseLength = endIdx - startIdx + 1;
+  Serial.println(pulseLength);
+  referencePulse.resize(pulseLength);
+  std::copy(tempBuffer.begin() + startIdx, tempBuffer.begin() + endIdx + 1, referencePulse.begin());
+}
+
+
+
+void captureCurrentPulse(int vpp) {
+  // Circular buffer implementation for current pulse data
+  currentPulse[pulseIndex] = vpp;
+  pulseIndex = (pulseIndex + 1) % pulseLength;  // Move to the next index in the circular buffer
+}
+
+float crossCorrelation(std::vector<int>& signal1, std::vector<int>& signal2, int startIndex) {
+  long long numerator = 0, denominator1 = 0, denominator2 = 0;
+  long long mean1 = 0, mean2 = 0;
+  int length = signal1.size();
+
+  // Compute means
+  for (int i = 0; i < length; i++) {
+    mean1 += signal1[i];
+    mean2 += signal2[(i + startIndex) % length]; // Adjust index for circular buffer
+  }
+  mean1 /= length;
+  mean2 /= length;
+
+  // Compute correlation
+  for (int i = 0; i < length; i++) {
+    int adjustedIndex = (i + startIndex) % length; // Adjust index for circular buffer
+    numerator += (signal1[i] - mean1) * (signal2[adjustedIndex] - mean2);
+    denominator1 += (signal1[i] - mean1) * (signal1[i] - mean1);
+    denominator2 += (signal2[adjustedIndex] - mean2) * (signal2[adjustedIndex] - mean2);
+  }
+
+  if (denominator1 == 0 || denominator2 == 0) return 0.0;  // Avoid division by zero
+  return numerator / sqrt(denominator1 * denominator2);  // Correlation coefficient
+}
+
+///////////  ONLY FOR TESTING PURPOSE
+
+void dumpRefPulse() {
+  Serial.print("Reference pulse data: ");
+  for (int i = 0; i < pulseLength; i++) {
+    Serial.print(referencePulse[i]);
+    Serial.print(" ");
+    Serial.println(0);
+  }
+  Serial.println();  // New line after printing all data
+}
+
+void dumpMatchedPulse() {
+  Serial.print("Matched pulse data: ");
+  for (int i = 0; i < pulseLength; i++) {
+    int index = (pulseIndex + i) % pulseLength;  // Correct index for circular buffer
+    Serial.print(referencePulse[i]);
+    Serial.print(" ");
+    Serial.println(currentPulse[index]);
+  }
+  Serial.println();  // New line after printing all data
+}
