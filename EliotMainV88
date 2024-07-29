@@ -198,7 +198,7 @@ const long ctThreadInterval = 50;          // Interval for ctThread() in millise
 const long timeUpdateInterval = 3600000;
 unsigned long averageSMV[4];
 
-bool awaitStop = false, awaitButtonPress = 0, hmiButtonFlag = 1;
+bool awaitStop = false, awaitButtonPress = 0, hmiButtonFlag = 1newPieceFlag=1;  /// should save to SD
 int pieceCount = 0;  //// should save to sd
 unsigned int areaReseterCounter=0;
 int lastEdge = 0;
@@ -916,11 +916,6 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
 
 void loop() {
   
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= ctThreadInterval) {
-        previousMillis = currentMillis;
-        ctThread();        
-    }
   checker();  //Page and button function checker
   displayDWIN();
 
@@ -931,8 +926,11 @@ void displayDWIN() {
 
   /**** Main page functions ****/
   if (pageNo == "2") {  //Main Page function
-
-    
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= ctThreadInterval) {
+        previousMillis = currentMillis;
+        ctThread();        
+    }          
     
     errorS = 1;
     time_t epochTime = timeClient.getEpochTime();
@@ -3331,15 +3329,20 @@ void ctThread() {
     areaReseterCounter++;
     toleranceArea = trainedArea - (trainedArea * 0.80);  /// inverse of autoModeTolarence
     if(trainingCountDown==0&&areaReseterCounter==(ctCyclesPerSec*5) && accumulatedArea < toleranceArea) {
-      Serial.print("Reset Area :");
-      Serial.println(accumulatedArea);
-      accumulatedArea=0;}
+      if(!newPiece){
+        newPiece=1;
+        Serial.print("Reset Area :");
+        Serial.println(accumulatedArea);
+        accumulatedArea=0;
+      }
+    }
   }
 
   toleranceArea = trainedArea - (trainedArea * autoModeTolerance);
   if (trainingCountDown == 0 && accumulatedArea > toleranceArea) {
     if (autoCountMode) {
       awaitStop = true;
+      newPiece=0;
       // String accumulatedA = String(accumulatedArea);
       // writeFile(SD, "/43.txt", accumulatedA.c_str()); /*SD Save*/
 
