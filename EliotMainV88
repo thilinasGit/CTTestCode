@@ -1,3 +1,4 @@
+///Sketch uses 1136353 bytes (86%) of program storage space. Maximum is 1310720 bytes.
 #include <WiFiManager.h>
 #include <WiFiClientSecure.h>
 #include <NTPClient.h>
@@ -20,7 +21,7 @@ int target;
 int workingHours;
 int efficiencyLevel1;
 int efficiencyLevel3;
-String deviceId = "ELIoT-00079";
+String deviceId = "ELIoT-00001";
 String sessionId_O;
 String sessionId_S;
 String sessionId_M;
@@ -198,7 +199,7 @@ const long ctThreadInterval = 50;          // Interval for ctThread() in millise
 const long timeUpdateInterval = 3600000;
 unsigned long averageSMV[4];
 
-bool awaitStop = false, awaitButtonPress = 0, hmiButtonFlag = 1newPieceFlag=1;  /// should save to SD
+bool awaitStop = false, awaitButtonPress = 0, hmiButtonFlag = 1, newPieceFlag=1, waitASec=0;  /// should save to SD
 int pieceCount = 0;  //// should save to sd
 unsigned int areaReseterCounter=0;
 int lastEdge = 0;
@@ -475,7 +476,7 @@ void setup() {
   /**** RGB Led function setup ****/
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
 
-  setLEDs(0,0,0,0);
+  //setLEDs(0,0,0,0);
   setLEDs(1,0,0,0);
 
   /**** SD card function setup ****/
@@ -3024,7 +3025,7 @@ void reconnectWiFi() {
 }
 
 
-void send_text(uint8_t txtNo, String text) {  // MAC address
+void send_text(uint8_t txtNo, String text) {  
   text.toCharArray(output, 50);
   uint8_t b3[]={0x12,0x15,0x06,0x06,0,0x09,0x06,0x0A,0x06,0x06,0,0,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x09,0,0x06,0xFF};
   uint8_t b5[]={0x10,0x11,0x12,0x16,0,0x14,0x80,0x81,0x87,0x85,0,0,0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x42,0,0x15,0x83};
@@ -3205,6 +3206,10 @@ void meter2() {  // DWIN efficency meter icon function
   if (E_RGB_HIGH <= t) {
    setLEDs(0,0,255,0);
   }
+  if (trainingCountDown!=0) 
+   setLEDs(0,0,0,255);
+  
+  
 }
 
 
@@ -3228,7 +3233,7 @@ void ctThread() {
     if (buttonPressCount == 1) {
       digitalWrite(ledPin, HIGH);
       
-      delay(1000);
+      delay(100);
       setIdleVpp();
       accumulatedArea = 0;
       Serial.println("Started trainning...");
@@ -3240,7 +3245,7 @@ void ctThread() {
         toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 2);
         if (accumulatedArea < toleranceArea) {
           pieceCount++;  //// piece count approves only after pretrained area is reached
-
+          
           String pieceC = String(pieceCount);
           writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
           effi_cal();
@@ -3254,6 +3259,7 @@ void ctThread() {
 
     if (trainingCountDown != 0 && buttonPressCount > 1) {
       digitalWrite(ledPin, HIGH);
+      if(accumulatedArea!=0.0){
       pieceCount++;  /// Take trainning piece as 1st count
       String pieceC = String(pieceCount);
       writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
@@ -3262,9 +3268,10 @@ void ctThread() {
       trainingCountDown--;
       String trainCD = String(trainingCountDown);
       writeFile(SD, "/42.txt", trainCD.c_str()); /*SD Save*/
-      savedLastEdge=lastEdgeMillis;
+      savedLastEdge=lastEdgeMillis;}
       printStats();
       if (trainingCountDown == 0) {
+        setLEDs(0,0,0,0);
         trainedArea = accumulatedArea / trainingNum;
         smv=lastEdgeMillis- savedLastEdge;
         String trainnedA = String(trainedArea);
@@ -3298,19 +3305,7 @@ void ctThread() {
 
     if (awaitStop) {
       awaitStop = false;
-      toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 2);
-      if (accumulatedArea < toleranceArea) {
-        pieceCount++;
-
-        String pieceC = String(pieceCount);
-        writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
-        //printStats();
-        effi_cal();
-      }
-
-      Serial.println(accumulatedArea);
-      accumulatedArea = 0;
-      Serial.println(pieceCount);
+      waitASec=true;
     }
   } else if (currentEdge == 1) {
     accumulateAreaFlag = true;
@@ -3329,12 +3324,26 @@ void ctThread() {
     areaReseterCounter++;
     toleranceArea = trainedArea - (trainedArea * 0.80);  /// inverse of autoModeTolarence
     if(trainingCountDown==0&&areaReseterCounter==(ctCyclesPerSec*5) && accumulatedArea < toleranceArea) {
-      if(!newPiece){
-        newPiece=1;
+      if(!newPieceFlag){
+        newPieceFlag=1;
         Serial.print("Reset Area :");
         Serial.println(accumulatedArea);
         accumulatedArea=0;
       }
+    }else if(areaReseterCounter==ctCyclesPerSec){
+      toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 2);
+      if (accumulatedArea < toleranceArea) {
+        pieceCount++;
+
+        String pieceC = String(pieceCount);
+        writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
+        //printStats();
+        effi_cal();
+      }
+
+      Serial.println(accumulatedArea);
+      accumulatedArea = 0;
+      Serial.println(pieceCount);
     }
   }
 
@@ -3342,7 +3351,7 @@ void ctThread() {
   if (trainingCountDown == 0 && accumulatedArea > toleranceArea) {
     if (autoCountMode) {
       awaitStop = true;
-      newPiece=0;
+      newPieceFlag=0;
       // String accumulatedA = String(accumulatedArea);
       // writeFile(SD, "/43.txt", accumulatedA.c_str()); /*SD Save*/
 
@@ -3448,6 +3457,7 @@ void setTrainingMode(int tcd) {
   String buttonPress = String(buttonPressCount);
   writeFile(SD, "/40.txt", buttonPress.c_str()); /*SD Save*/
   trainingCountDown = tcd;
+  setLEDs(0,0,255,0);
   trainedArea = 0;
   String trainnedA = String(trainedArea);
   writeFile(SD, "/44.txt", trainnedA.c_str()); /*SD Save*/
@@ -3598,6 +3608,9 @@ void Efficiency() {
       setLEDs(0,255,165,0);
     }
     if (E_RGB_HIGH <= t) {
+      setLEDs(0,0,255,0);
+    }
+    if (trainingCountDown!=0) {
       setLEDs(0,0,255,0);
     }
   }
