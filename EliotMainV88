@@ -11,7 +11,7 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <MovingAverage.h>
-MovingAverage<float> avrVpp(5, 0);
+MovingAverage<float> avrVpp(4, 0);
 
 
 /**** Global variables ****/
@@ -21,7 +21,7 @@ int target;
 int workingHours;
 int efficiencyLevel1;
 int efficiencyLevel3;
-String deviceId = "ELIoT-00001";
+String deviceId = "ELIoT-00006";
 String sessionId_O;
 String sessionId_S;
 String sessionId_M;
@@ -193,9 +193,9 @@ float upperTrigger = 0.12;
 float lowerTrigger = 0.05;
 int c;
 float idleVpp;  //// should save to sd
-unsigned long trainnedSMV=0, lastEdgeMillis=0, savedLastEdge=0,lastPieceMillis=0;
+unsigned long trainnedSMV=0, cycleTime=0 ,lastEdgeMillis=0, savedLastEdge=0,lastPieceMillis=0,lastBtnPressMillis=0;
 unsigned long previousMillis = 0;  // Store the last time ctThread() was called
-const long ctThreadInterval = 50;          // Interval for ctThread() in milliseconds
+const long ctThreadInterval = 50;  // Interval for ctThread() in milliseconds
 const long timeUpdateInterval = 3600000;
 unsigned long averageSMV[4];
 
@@ -420,7 +420,7 @@ void codeForTask1(void *parameter) {
 
 void setup() {
 
-  Serial.begin(115200);
+  Serial.begin(500000);
 
   /**** CT sensor ****/
   pinMode(ledPin, OUTPUT);
@@ -3199,14 +3199,11 @@ void meter2() {  // DWIN efficency meter icon function
 
   if (E_RGB_LOW >= t) {
     setLEDs(0,255,0,0);
-  }
-  if (E_RGB_HIGH > t && E_RGB_LOW < t) {
+  }else if (E_RGB_HIGH > t && E_RGB_LOW < t) {
     setLEDs(0,255,165,0);
-  }
-  if (E_RGB_HIGH <= t) {
+  }else if (E_RGB_HIGH <= t) {
    setLEDs(0,0,255,0);
-  }
-  if (trainingCountDown!=0) 
+  }else if (trainingCountDown!=0) 
    setLEDs(0,0,0,255);
   
   
@@ -3259,7 +3256,7 @@ void ctThread() {
 
     if (trainingCountDown != 0 && buttonPressCount > 1) {
       digitalWrite(ledPin, HIGH);
-      if(accumulatedArea!=0.0){
+      if(accumulatedArea>0.0){
       pieceCount++;  /// Take trainning piece as 1st count
       String pieceC = String(pieceCount);
       writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
@@ -3280,6 +3277,7 @@ void ctThread() {
         accumulatedArea = 0;  /// reset at last
         Serial.print("\ntrainned Area-");
         Serial.println(trainedArea);
+        Serial.println(smv);
         pageShift(1);
       }
     }
@@ -3305,7 +3303,16 @@ void ctThread() {
 
     if (awaitStop) {
       awaitStop = false;
-      waitASec=true;
+      toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 2);
+      
+      if (accumulatedArea < toleranceArea) {
+        waitASec=true;
+      }
+  
+      Serial.println(accumulatedArea);
+      accumulatedArea = 0;
+      Serial.println(pieceCount);
+      
     }
   } else if (currentEdge == 1) {
     accumulateAreaFlag = true;
@@ -3318,6 +3325,7 @@ void ctThread() {
     accumulatedArea += cVpp;
     digitalWrite(ledPin, HIGH);
     areaReseterCounter=0;
+    waitASec=0;
   } else {
     digitalWrite(ledPin, LOW);  /// operation traking is indicated by led
     int ctCyclesPerSec=1000/ctThreadInterval;
@@ -3330,20 +3338,13 @@ void ctThread() {
         Serial.println(accumulatedArea);
         accumulatedArea=0;
       }
-    }else if(areaReseterCounter==ctCyclesPerSec){
-      toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 2);
-      if (accumulatedArea < toleranceArea) {
-        pieceCount++;
-
-        String pieceC = String(pieceCount);
-        writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
-        //printStats();
-        effi_cal();
-      }
-
-      Serial.println(accumulatedArea);
-      accumulatedArea = 0;
-      Serial.println(pieceCount);
+    }else if(waitASec&&trainingCountDown==0&&areaReseterCounter==ctCyclesPerSec){
+      waitASec=0;
+      pieceCount++;
+      String pieceC = String(pieceCount);
+      writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
+      //printStats();
+      effi_cal();
     }
   }
 
@@ -3457,7 +3458,7 @@ void setTrainingMode(int tcd) {
   String buttonPress = String(buttonPressCount);
   writeFile(SD, "/40.txt", buttonPress.c_str()); /*SD Save*/
   trainingCountDown = tcd;
-  setLEDs(0,0,255,0);
+  setLEDs(0,0,0,255);
   trainedArea = 0;
   String trainnedA = String(trainedArea);
   writeFile(SD, "/44.txt", trainnedA.c_str()); /*SD Save*/
@@ -3498,6 +3499,7 @@ void onTheHour() {
   struct tm *ptm = gmtime(&epochTime);
 
   currentMinute = ptm->tm_min;  // Get the current minute
+
 
   if (currentMinute % 5 == 0 && Min_X == 1) {
 
@@ -3557,7 +3559,7 @@ void onTheHour() {
     Efficiency();
   }
 
-  if (currentMinute >= 45) {
+  if (currentMinute == 45 && currentMinute == 55) {
     Hour_Z = 1;
     String HourZ = String(Hour_Z);
     writeFile(SD, "/70-1.txt", HourZ.c_str()); /*SD Save*/
@@ -3603,15 +3605,12 @@ void Efficiency() {
 
     if (E_RGB_LOW >= t) {
       setLEDs(0,255,0,0);
-    }
-    if (E_RGB_HIGH > t && E_RGB_LOW < t) {
+    } else if (E_RGB_HIGH > t && E_RGB_LOW < t) {
       setLEDs(0,255,165,0);
-    }
-    if (E_RGB_HIGH <= t) {
+    }else if (E_RGB_HIGH <= t) {
       setLEDs(0,0,255,0);
-    }
-    if (trainingCountDown!=0) {
-      setLEDs(0,0,255,0);
+    }else if (trainingCountDown!=0) {
+      setLEDs(0,0,0,255);
     }
   }
 
