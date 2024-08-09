@@ -21,7 +21,7 @@ int target;
 int workingHours;
 int efficiencyLevel1;
 int efficiencyLevel3;
-String deviceId = "ELIoT-00006";
+String deviceId = "ELIoT-00010";
 String sessionId_O;
 String sessionId_S;
 String sessionId_M;
@@ -186,18 +186,19 @@ float vppBuffer[edgeBuffSize];
 int currentIndex = 0, bufferIndex;
 bool accumulateAreaFlag = false;
 double accumulatedArea = 0.0, trainedArea = 0.0, toleranceArea = 0.0;  //// should save to sd
-float autoModeTolerance = 0.15;
+float autoModeTolerance = 0.13;
 float threshold;
 float difference = 0.1;
 float upperTrigger = 0.12;
 float lowerTrigger = 0.05;
 int c;
 float idleVpp;  //// should save to sd
-unsigned long trainnedSMV=0, cycleTime=0 ,lastEdgeMillis=0, savedLastEdge=0,lastPieceMillis=0,lastBtnPressMillis=0;
+unsigned long trainedSMV=0, cycleTime=0 , autoSMV=0;
+unsigned long lastEdgeMillis=0, savedLastEdge=0,lastPieceMillis=0,lastBtnPressMillis=0;
 unsigned long previousMillis = 0;  // Store the last time ctThread() was called
 const long ctThreadInterval = 50;  // Interval for ctThread() in milliseconds
 const long timeUpdateInterval = 3600000;
-unsigned long averageSMV[4];
+MovingAverage<int> avrAutoSMV(5,0);
 
 bool awaitStop = false, awaitButtonPress = 0, hmiButtonFlag = 1, newPieceFlag=1, waitASec=0;  /// should save to SD
 int pieceCount = 0;  //// should save to sd
@@ -3270,14 +3271,14 @@ void ctThread() {
       if (trainingCountDown == 0) {
         setLEDs(0,0,0,0);
         trainedArea = accumulatedArea / trainingNum;
-        smv=lastEdgeMillis- savedLastEdge;
+        trainedSMV=lastEdgeMillis- savedLastEdge;
         String trainnedA = String(trainedArea);
         writeFile(SD, "/44.txt", trainnedA.c_str()); /*SD Save*/
 
         accumulatedArea = 0;  /// reset at last
         Serial.print("\ntrainned Area-");
         Serial.println(trainedArea);
-        Serial.println(smv);
+        Serial.println(trainedSMV);
         pageShift(1);
       }
     }
@@ -3341,6 +3342,9 @@ void ctThread() {
     }else if(waitASec&&trainingCountDown==0&&areaReseterCounter==ctCyclesPerSec){
       waitASec=0;
       pieceCount++;
+      autoSMV=millis()-lastPieceMillis;
+      avrAutoSMV.push(autoSMV);
+      lastPieceMillis=millis();
       String pieceC = String(pieceCount);
       writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
       //printStats();
@@ -3398,22 +3402,22 @@ int getEdge() {
 }
 
 float getVpp() {
-  // Read ADC values into buffer
-  for (int i = 0; i < vppBuffSize; i++) {
-    adcValues[i] = analogRead(adcPin);
-    delay(2);  // Adjust delay as needed based on sampling frequency
-  }
+  // Initialize the first ADC value
+  int maxVal = analogRead(adcPin);
+  int minVal = maxVal;
 
-  // Find maximum and minimum values in buffer
-  int maxVal = adcValues[0];
-  int minVal = adcValues[0];
+  // Read ADC values, finding min and max on the fly
   for (int i = 1; i < vppBuffSize; i++) {
-    if (adcValues[i] > maxVal) {
-      maxVal = adcValues[i];
+    int adcValue = analogRead(adcPin);
+
+    if (adcValue > maxVal) {
+      maxVal = adcValue;
     }
-    if (adcValues[i] < minVal) {
-      minVal = adcValues[i];
+    if (adcValue < minVal) {
+      minVal = adcValue;
     }
+
+    delay(2);  // Adjust delay as needed based on sampling frequency
   }
 
   // Calculate peak-to-peak voltage
@@ -3802,7 +3806,7 @@ void callback(char *topic, byte *payload, unsigned int length) {
 
   // Ensure the deserialized document is a JSON object
   if (!doc.is<JsonObject>()) {
-    Serial.println("Received JSON is not a valid object");
+    Serial.println("Received JSON is not a valid");
     return;
   }
 
@@ -3956,17 +3960,17 @@ void set_AlertLog(String verifiedKey, String machineId, String operatorRfid, Str
   serializeJson(jsonDocument, jsonBuffer);
 
   client.publish(send_topic, jsonBuffer);
-  Serial.println("Published data: ");
-  Serial.print("verifiedKey : ");
-  Serial.println(verifiedKey);
-  Serial.print("machineId : ");
-  Serial.println(machineId);
-  Serial.print("operatorRfid : ");
-  Serial.println(operatorRfid);
-  Serial.print("employeeId : ");
-  Serial.println(employeeId);
-  Serial.print("alertType : ");
-  Serial.println(alertType);
+  Serial.println("set alertlog");
+  // Serial.print("verifiedKey : ");
+  // Serial.println(verifiedKey);
+  // Serial.print("machineId : ");
+  // Serial.println(machineId);
+  // Serial.print("operatorRfid : ");
+  // Serial.println(operatorRfid);
+  // Serial.print("employeeId : ");
+  // Serial.println(employeeId);
+  // Serial.print("alertType : ");
+  // Serial.println(alertType);
 }
 
 
@@ -4001,15 +4005,15 @@ void set_LogStatus(String verifiedKey, String machineId, String employeeId, Stri
   serializeJson(jsonDocument, jsonBuffer);
 
   client.publish(send_topic, jsonBuffer);
-  Serial.println("Published data: ");
-  Serial.print("verifiedKey : ");
-  Serial.println(verifiedKey);
-  Serial.print("machineId : ");
-  Serial.println(machineId);
-  Serial.print("employeeId : ");
-  Serial.println(employeeId);
-  Serial.print("reqType : ");
-  Serial.println(reqType);
+  Serial.println("Set log status");
+  // Serial.print("verifiedKey : ");
+  // Serial.println(verifiedKey);
+  // Serial.print("machineId : ");
+  // Serial.println(machineId);
+  // Serial.print("employeeId : ");
+  // Serial.println(employeeId);
+  // Serial.print("reqType : ");
+  // Serial.println(reqType);
 }
 
 //SET data in OperatorSession, if isLoggedIn status is 0
@@ -4027,17 +4031,17 @@ void set_operatorSession(String id, String operatorRfid, String obbOperationId, 
   serializeJson(jsonDocument, jsonBuffer);
 
   client.publish(send_topic, jsonBuffer);
-  Serial.println("Published data: ");
-  Serial.print("id : ");
-  Serial.println(id);
-  Serial.print("operatorRfid : ");
-  Serial.println(operatorRfid);
-  Serial.print("obbOperationId : ");
-  Serial.println(obbOperationId);
-  Serial.print("isLoggedIn : ");
-  Serial.println(isLoggedIn);
-  Serial.print("LoginTimestamp : ");
-  Serial.println(LoginTimestamp);
+  Serial.println("Published Operator Session");
+  // Serial.print("id : ");
+  // Serial.println(id);
+  // Serial.print("operatorRfid : ");
+  // Serial.println(operatorRfid);
+  // Serial.print("obbOperationId : ");
+  // Serial.println(obbOperationId);
+  // Serial.print("isLoggedIn : ");
+  // Serial.println(isLoggedIn);
+  // Serial.print("LoginTimestamp : ");
+  // Serial.println(LoginTimestamp);
 }
 
 //Append data to OperatorSession, if isLoggedIn status is 1
@@ -4053,11 +4057,11 @@ void append_operatorSession(String id, String LogoutTimestamp) {
   serializeJson(jsonDocument, jsonBuffer);
 
   client.publish(send_topic, jsonBuffer);
-  Serial.println("Published data: ");
-  Serial.print("id : ");
-  Serial.println(id);
-  Serial.print("LogoutTimestamp : ");
-  Serial.println(LogoutTimestamp);
+  Serial.println("Published Operation Session");
+  // Serial.print("id : ");
+  // Serial.println(id);
+  // Serial.print("LogoutTimestamp : ");
+  // Serial.println(LogoutTimestamp);
 }
 
 //SET data in staffSession, if isLoggedIn status is 0
@@ -4075,17 +4079,17 @@ void set_staffSession(String id, String staffEmpId, String obbOperationId, Strin
   serializeJson(jsonDocument, jsonBuffer);
 
   client.publish(send_topic, jsonBuffer);
-  Serial.println("Published data: ");
-  Serial.print("id : ");
-  Serial.println(id);
-  Serial.print("staffEmpId : ");
-  Serial.println(staffEmpId);
-  Serial.print("obbOperationId : ");
-  Serial.println(obbOperationId);
-  Serial.print("isLoggedIn : ");
-  Serial.println(isLoggedIn);
-  Serial.print("LoginTimestamp : ");
-  Serial.println(LoginTimestamp);
+  Serial.println("Published Staff Session1");
+  // Serial.print("id : ");
+  // Serial.println(id);
+  // Serial.print("staffEmpId : ");
+  // Serial.println(staffEmpId);
+  // Serial.print("obbOperationId : ");
+  // Serial.println(obbOperationId);
+  // Serial.print("isLoggedIn : ");
+  // Serial.println(isLoggedIn);
+  // Serial.print("LoginTimestamp : ");
+  // Serial.println(LoginTimestamp);
 }
 
 //Append data to staffSession, if isLoggedIn status is 1
@@ -4101,11 +4105,11 @@ void append_staffSession(String id, String LogoutTimestamp) {
   serializeJson(jsonDocument, jsonBuffer);
 
   client.publish(send_topic, jsonBuffer);
-  Serial.println("Published data: ");
-  Serial.print("id : ");
-  Serial.println(id);
-  Serial.print("LogoutTimestamp : ");
-  Serial.println(LogoutTimestamp);
+  Serial.println("Published Staff Session2");
+  // Serial.print("id : ");
+  // Serial.println(id);
+  // Serial.print("LogoutTimestamp : ");
+  // Serial.println(LogoutTimestamp);
 }
 
 //SET in ProductionData
@@ -4123,17 +4127,17 @@ void set_ProductionData(String operatorRfid, String eliotSerialNumber, String ob
   serializeJson(jsonDocument, jsonBuffer);
 
   client.publish(send_topic, jsonBuffer);
-  Serial.println("Published data: ");
-  Serial.print("operatorRfid : ");
-  Serial.println(operatorRfid);
-  Serial.print("eliotSerialNumber : ");
-  Serial.println(eliotSerialNumber);
-  Serial.print("obbOperationId : ");
-  Serial.println(obbOperationId);
-  Serial.print("productionCount : ");
-  Serial.println(productionCount);
-  Serial.print("timestamp : ");
-  Serial.println(timestamp);
+  Serial.println("Production Data published");
+  // Serial.print("operatorRfid : ");
+  // Serial.println(operatorRfid);
+  // Serial.print("eliotSerialNumber : ");
+  // Serial.println(eliotSerialNumber);
+  // Serial.print("obbOperationId : ");
+  // Serial.println(obbOperationId);
+  // Serial.print("productionCount : ");
+  // Serial.println(productionCount);
+  // Serial.print("timestamp : ");
+  // Serial.println(timestamp);
 }
 
 
