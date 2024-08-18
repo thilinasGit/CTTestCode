@@ -1,4 +1,5 @@
-///Sketch uses 1136353 bytes (86%) of program storage space. Maximum is 1310720 bytes.
+//// lne 4594 , line 4408 sd save
+
 #include <WiFiManager.h>
 #include <WiFiClientSecure.h>
 #include <NTPClient.h>
@@ -11,17 +12,19 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <MovingAverage.h>
-MovingAverage<float> avrVpp(4, 0);
+MovingAverage<float> avrVpp(5, 0);
 
 
 /**** Global variables ****/
 int smv;
+int smv_CT;
+float smv_CAL;
 int spi;
 int target;
 int workingHours;
 int efficiencyLevel1;
 int efficiencyLevel3;
-String deviceId = "ELIoT-00006";
+String deviceId = "ELIoT-00025";
 String sessionId_O;
 String sessionId_S;
 String sessionId_M;
@@ -95,6 +98,8 @@ int L;     /*Need to save-DONE*/
 int J = 0; /*Need Change J = 1 when download-DONE*/
 int sR;
 int mR;
+int SuMe = 0;
+int SuMe_memo = 0;
 int mechanicCheck;
 int supervisorCheck;
 
@@ -154,6 +159,7 @@ int errorL;
 int Hour_X = 1;
 int Hour_Y = 0;
 int Hour_Z = 0;
+int Done45 = 0;
 
 int Min_X = 1;
 int Min_Y = 0;
@@ -193,58 +199,62 @@ float upperTrigger = 0.12;
 float lowerTrigger = 0.05;
 int c;
 float idleVpp;  //// should save to sd
-unsigned long trainnedSMV=0, cycleTime=0 ,lastEdgeMillis=0, savedLastEdge=0,lastPieceMillis=0,lastBtnPressMillis=0;
+
+unsigned long trainedSMV = 0, cycleTime = 0, autoSMV = 0;
+unsigned long lastEdgeMillis = 0, savedLastEdge = 0, lastPieceMillis = 0, lastBtnPressMillis = 0;
 unsigned long previousMillis = 0;  // Store the last time ctThread() was called
 const long ctThreadInterval = 50;  // Interval for ctThread() in milliseconds
 const long timeUpdateInterval = 3600000;
-unsigned long averageSMV[4];
+unsigned long lastAccumulationTime = 0;  // Stores the time of the last accumulation
+float previousCVpp = 0;  // Stores the previous cVpp value
 
-bool awaitStop = false, awaitButtonPress = 0, hmiButtonFlag = 1, newPieceFlag=1, waitASec=0;  /// should save to SD
-int pieceCount = 0;  //// should save to sd
-unsigned int areaReseterCounter=0;
+MovingAverage<int> avrAutoSMV(5, 0);
+int avrSMVBuff[10];
+int avrSMVBuffIndex=0;
+
+bool awaitStop = false, awaitButtonPress = 0, hmiButtonFlag = 1, newPieceFlag = 1, waitASec = 0;  /// should save to SD
+int pieceCount = 0;                                                                               //// should save to sd
+unsigned int areaReseterCounter = 0;
 int lastEdge = 0;
 bool autoCountMode = 1;     /////// Auto manual mode selection   (to eeprom)
 int buttonPressCount = 0;   /// If buttonpresscount is zero bak to traning mode   (//// should save to sd)
 int trainingCountDown = 2;  /////// should save to sd
 uint8_t trainingNum = 2;    /// set no of traning steps
 
-///NTP 
-time_t localEpochTime = 0;
-
 /**** MQTT Constants ****/
 const char *mqtt_broker = "wb4664bb.ala.us-east-1.emqxsl.com";
-const char *send_topic = "EmmanuelsLanka/commands_control-45Yb_zN$8_ELIoT_Pro_Send";                 // Topic for sending data
-String topic = "EmmanuelsLanka/commands_control-45Yb_zN$8_ELIoT_Pro_Receive/" + deviceId; // Topic for receiving data
+const char *send_topic = "EmmanuelsLanka/commands_control-45Yb_zN$8_ELIoT_Pro_Send";       // Topic for sending data
+String topic = "EmmanuelsLanka/commands_control-45Yb_zN$8_ELIoT_Pro_Receive/" + deviceId;  // Topic for receiving data
 const char *recv_topic = topic.c_str();
 
-const char *mqtt_username = "eliot2024";  // For the usage of server
-const char *mqtt_password = "ELIoT@2024"; // For the usage of server
+const char *mqtt_username = "eliot2024";   // For the usage of server
+const char *mqtt_password = "ELIoT@2024";  // For the usage of server
 const int mqtt_port = 8883;
 
 // Root CA certificate for the MQTT broker
-const char *root_ca = \
-"-----BEGIN CERTIFICATE-----\n" \
-"MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh\n" \
-"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n" \
-"d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD\n" \
-"QTAeFw0wNjExMTAwMDAwMDBaFw0zMTExMTAwMDAwMDBaMGExCzAJBgNVBAYTAlVT\n" \
-"MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n" \
-"b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IENBMIIBIjANBgkqhkiG\n" \
-"9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4jvhEXLeqKTTo1eqUKKPC3eQyaKl7hLOllsB\n" \
-"CSDMAZOnTjC3U/dDxGkAV53ijSLdhwZAAIEJzs4bg7/fzTtxRuLWZscFs3YnFo97\n" \
-"nh6Vfe63SKMI2tavegw5BmV/Sl0fvBf4q77uKNd0f3p4mVmFaG5cIzJLv07A6Fpt\n" \
-"43C/dxC//AH2hdmoRBBYMql1GNXRor5H4idq9Joz+EkIYIvUX7Q6hL+hqkpMfT7P\n" \
-"T19sdl6gSzeRntwi5m3OFBqOasv+zbMUZBfHWymeMr/y7vrTC0LUq7dBMtoM1O/4\n" \
-"gdW7jVg/tRvoSSiicNoxBN33shbyTApOB6jtSj1etX+jkMOvJwIDAQABo2MwYTAO\n" \
-"BgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA95QNVbR\n" \
-"TLtm8KPiGxvDl7I90VUwHwYDVR0jBBgwFoAUA95QNVbRTLtm8KPiGxvDl7I90VUw\n" \
-"DQYJKoZIhvcNAQEFBQADggEBAMucN6pIExIK+t1EnE9SsPTfrgT1eXkIoyQY/Esr\n" \
-"hMAtudXH/vTBH1jLuG2cenTnmCmrEbXjcKChzUyImZOMkXDiqw8cvpOp/2PV5Adg\n" \
-"06O/nVsJ8dWO41P0jmP6P6fbtGbfYmbW0W5BjfIttep3Sp+dWOIrWcBAI+0tKIJF\n" \
-"PnlUkiaY4IBIqDfv8NZ5YBberOgOzW6sRBc4L0na4UU+Krk2U886UAb3LujEV0ls\n" \
-"YSEY1QSteDwsOoBrp+uvFRTp2InBuThs4pFsiv9kuXclVzDAGySj4dzp30d8tbQk\n" \
-"CAUw7C29C79Fv1C5qfPrmAESrciIxpg0X40KPMbp1ZWVbd4=\n" \
-"-----END CERTIFICATE-----\n";
+const char *root_ca =
+  "-----BEGIN CERTIFICATE-----\n"
+  "MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh\n"
+  "MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
+  "d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD\n"
+  "QTAeFw0wNjExMTAwMDAwMDBaFw0zMTExMTAwMDAwMDBaMGExCzAJBgNVBAYTAlVT\n"
+  "MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n"
+  "b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IENBMIIBIjANBgkqhkiG\n"
+  "9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4jvhEXLeqKTTo1eqUKKPC3eQyaKl7hLOllsB\n"
+  "CSDMAZOnTjC3U/dDxGkAV53ijSLdhwZAAIEJzs4bg7/fzTtxRuLWZscFs3YnFo97\n"
+  "nh6Vfe63SKMI2tavegw5BmV/Sl0fvBf4q77uKNd0f3p4mVmFaG5cIzJLv07A6Fpt\n"
+  "43C/dxC//AH2hdmoRBBYMql1GNXRor5H4idq9Joz+EkIYIvUX7Q6hL+hqkpMfT7P\n"
+  "T19sdl6gSzeRntwi5m3OFBqOasv+zbMUZBfHWymeMr/y7vrTC0LUq7dBMtoM1O/4\n"
+  "gdW7jVg/tRvoSSiicNoxBN33shbyTApOB6jtSj1etX+jkMOvJwIDAQABo2MwYTAO\n"
+  "BgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA95QNVbR\n"
+  "TLtm8KPiGxvDl7I90VUwHwYDVR0jBBgwFoAUA95QNVbRTLtm8KPiGxvDl7I90VUw\n"
+  "DQYJKoZIhvcNAQEFBQADggEBAMucN6pIExIK+t1EnE9SsPTfrgT1eXkIoyQY/Esr\n"
+  "hMAtudXH/vTBH1jLuG2cenTnmCmrEbXjcKChzUyImZOMkXDiqw8cvpOp/2PV5Adg\n"
+  "06O/nVsJ8dWO41P0jmP6P6fbtGbfYmbW0W5BjfIttep3Sp+dWOIrWcBAI+0tKIJF\n"
+  "PnlUkiaY4IBIqDfv8NZ5YBberOgOzW6sRBc4L0na4UU+Krk2U886UAb3LujEV0ls\n"
+  "YSEY1QSteDwsOoBrp+uvFRTp2InBuThs4pFsiv9kuXclVzDAGySj4dzp30d8tbQk\n"
+  "CAUw7C29C79Fv1C5qfPrmAESrciIxpg0X40KPMbp1ZWVbd4=\n"
+  "-----END CERTIFICATE-----\n";
 
 /**** Initialize MQTT client ****/
 WiFiClientSecure espClient;  // Secure WiFi client for TLS/SSL
@@ -331,6 +341,7 @@ WiFiUDP ntpUDP;
 //const long utcOffsetInSeconds = 19800; //(UTC+5:30)
 const long utcOffsetInSeconds = 21600;  //(UTC+6)
 NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
+time_t localEpochTime = 0;
 
 
 /**** Time String Convert ****/
@@ -368,50 +379,90 @@ void codeForTask1(void *parameter) {
       wifiData = 1;  // When Wifi disconnect
       delay(1000);
       uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x02, 0x00, 0x00, 0x01 };
-      sendCommand(data1);
-      sendCommand(data1);
-      sendCommand(data1);
+      for (size_t i = 0; i < 8; i++) {
+        Serial2.write(data1[i]);
+      }
+      uint8_t data2[] = { 0x5A, 0xA5, 0x05, 0x82, 0x02, 0x00, 0x00, 0x01 };
+      for (size_t i = 0; i < 8; i++) {
+        Serial2.write(data2[i]);
+      }
+      uint8_t data3[] = { 0x5A, 0xA5, 0x05, 0x82, 0x02, 0x00, 0x00, 0x01 };
+      for (size_t i = 0; i < 8; i++) {
+        Serial2.write(data3[i]);
+      }
 
       // Attempt to reconnect to Wi-Fi
       reconnectWiFi();
 
+      wifiData = 2;  // When Wifi reconnect
       // Attempt to reconnect to MQTT
       MQTT_Reconnect();
 
-      wifiData = 2;  // When Wifi reconnect
+
       delay(1000);
       uint8_t data4[] = { 0x5A, 0xA5, 0x05, 0x82, 0x02, 0x00, 0x00, 0x00 };
-      sendCommand(data4);
-      sendCommand(data4);
-      sendCommand(data4);
-
+      for (size_t i = 0; i < 8; i++) {
+        Serial2.write(data4[i]);
+      }
+      uint8_t data5[] = { 0x5A, 0xA5, 0x05, 0x82, 0x02, 0x00, 0x00, 0x00 };
+      for (size_t i = 0; i < 8; i++) {
+        Serial2.write(data5[i]);
+      }
+      uint8_t data6[] = { 0x5A, 0xA5, 0x05, 0x82, 0x02, 0x00, 0x00, 0x00 };
+      for (size_t i = 0; i < 8; i++) {
+        Serial2.write(data6[i]);
+      }
     }
 
     // Supervisor and mechnic LED blinking function
     else if ((S_mem == 1) && (M_mem == 1)) {
-      setLEDs(1,255,0,255);
+      leds[0] = CRGB(255, 0, 255);
+      FastLED.show();
+      leds[1] = CRGB(255, 0, 255);
+      FastLED.show();
       delay(1000);
-      setLEDs(1,0,0,0);
+      leds[0] = CRGB(0, 0, 0);
+      FastLED.show();
+      leds[1] = CRGB(0, 0, 0);
+      FastLED.show();
       delay(1000);
-      setLEDs(1,0,255,255);
+      leds[0] = CRGB(0, 255, 255);
+      FastLED.show();
+      leds[1] = CRGB(0, 255, 255);
+      FastLED.show();
       delay(1000);
-      setLEDs(1,0,0,0);
+      leds[0] = CRGB(0, 0, 0);
+      FastLED.show();
+      leds[1] = CRGB(0, 0, 0);
+      FastLED.show();
       delay(1000);
     }
 
     // Supervisor LED blinking function
     else if (S_mem == 1) {
-      setLEDs(1,255,0,255);
+      leds[0] = CRGB(255, 0, 255);
+      FastLED.show();
+      leds[1] = CRGB(255, 0, 255);
+      FastLED.show();
       delay(1000);
-      setLEDs(1,0,0,0);
+      leds[0] = CRGB(0, 0, 0);
+      FastLED.show();
+      leds[1] = CRGB(0, 0, 0);
+      FastLED.show();
       delay(1000);
     }
 
     // Mechanic LED blinking function
     else if (M_mem == 1) {
-      setLEDs(1,0,255,255);
+      leds[0] = CRGB(0, 255, 255);
+      FastLED.show();
+      leds[1] = CRGB(0, 255, 255);
+      FastLED.show();
       delay(1000);
-      setLEDs(1,0,0,0);
+      leds[0] = CRGB(0, 0, 0);
+      FastLED.show();
+      leds[1] = CRGB(0, 0, 0);
+      FastLED.show();
       delay(1000);
     }
   }
@@ -420,7 +471,7 @@ void codeForTask1(void *parameter) {
 
 void setup() {
 
-  Serial.begin(500000);
+  Serial.begin(250000);
 
   /**** CT sensor ****/
   pinMode(ledPin, OUTPUT);
@@ -443,20 +494,21 @@ void setup() {
   Serial2.begin(115200);
 
   delay(300);
-  send_text(19,deviceId);
-  send_text(19,deviceId);
-  send_text(19,deviceId);
+  send_text19(deviceId);
+  send_text19(deviceId);
+  send_text19(deviceId);
 
   /**** WIFI connect function ****/
   bool res;
-  res = wm.autoConnect(deviceId.c_str(),"eliot@2024");  // anonymous ap
+  //res = wm.autoConnect(deviceId.c_str(), "eliot@2024");  // anonymous ap
+  res = wm.autoConnect(deviceId.c_str(), "1111111111");  // anonymous ap
   if (!res) {
     Serial.println("Failed to connect");
     //reconnectWiFi();
     //ESP.restart();
   } else {
     //if you get here you have connected to the WiFi
-    Serial.println("connected:)");
+    Serial.println("connected...yeey :)");
   }
 
   /**** MQTT connect function ****/
@@ -476,8 +528,17 @@ void setup() {
   /**** RGB Led function setup ****/
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
 
-  //setLEDs(0,0,0,0);
-  setLEDs(1,0,0,0);
+  leds[0] = CRGB(0, 0, 0);
+  FastLED.show();
+
+  leds[1] = CRGB(0, 0, 0);
+  FastLED.show();
+
+  leds[2] = CRGB(0, 0, 0);
+  FastLED.show();
+
+  leds[3] = CRGB(0, 0, 0);
+  FastLED.show();
 
   /**** SD card function setup ****/
 
@@ -503,26 +564,29 @@ void setup() {
   readFile(SD, "/71.txt"); /*SD Read*/
   opChangeM = rdline.toInt();
 
+  readFile(SD, "/72.txt"); /*SD Read*/
+  SuMe = rdline.toInt();
+
   Serial.print("BreakCheck = ");
   Serial.println(BreakCheck);
-
+  Serial.println(SuMe);
   /**** New Id genersting ****/
   randomSeed(analogRead(0));
   encodedDeviceId = encodeDeviceId(deviceId);  // Encode the numeric part of the device ID
 
   String autoM = "A";
-  send_text(6,autoM);
-  send_text(6,autoM);
+  send_text6(autoM);
+  send_text6(autoM);
 
   updateTime();
 }
 
-void updateTime() {   
-  Serial.println("Running time sync loop..");      
+void updateTime() {
+  Serial.println("Running time sync loop..");
   while (timeClient.getEpochTime() < 1721184478) {
-      timeClient.update();
-      localEpochTime = timeClient.getEpochTime();
-      delay(20); // Wait before retrying
+    timeClient.update();
+    localEpochTime = timeClient.getEpochTime();
+    delay(100);  // Wait before retrying
   }
 }
 
@@ -563,7 +627,7 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
     if (dataReceived_result) {
       if ((result == "1" || result == "0") && ((pageNo == "1") || (pageNo == "9") || (RFIDpageNo == "1") || (RFIDpageNo == "9"))) {
 
-        if (result == "0")  //If result =0 -- login
+        if ((result == "0") && ((pageNo == "1") || (RFIDpageNo == "1")))  //If result =0 -- login
         {
 
           M = 0;
@@ -617,13 +681,14 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
 
 
           /* NODE RED */
+          send_loginTS(OperatorID, dateTime);  // send operator login timestamp
           set_operatorSession(sessionId_O, OperatorID, obbOperationId, "t", dateTime);
           append_operator_t(OperatorID);
 
-          pageShift(1);  //Page 02 (Main page)
-          send_text(1,dataa);
+          pageShift1();  //Page 02 (Main page)
+          send_text1(dataa);
 
-        } else if (result == "1") {  //If result =1 -- logout
+        } else if ((result == "1") && ((pageNo == "9") || (RFIDpageNo == "9")) && ((OperatorID == dataa) || (dataa == "OP-00000"))) {  //If result =1 -- logout
 
           M = 0;
           RFIDpageNo = "";
@@ -655,17 +720,26 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
           writeFile(SD, "/22.txt", attenOp.c_str()); /*SD Save*/
 
           /* NODE RED */
+          send_logoutTS(OperatorID, dateTime);  //send operator logout timestamp
           append_operatorSession(sessionId_O, dateTime);
           append_operator_f(OperatorID);
 
-          pageShift(18);  // Page 21 (Page before Network setting up page)
+          pageShift18();  // Page 21 (Page before Network setting up page)
+        } else if (dataa.length() > 0) {
+          if (M == 0) {
+            RFIDpageNo = pageNo;
+            M = 1;
+          }
+          pageShift6();  //Page 20 (Tryagain Page)
         }
-      } else if ((result == "2")||(pageNo == "7") || (pageNo == "8")||(pageNo == "10")||(pageNo == "5") || (pageNo == "6") ) {
+
+      } else if ((result == "2") || (pageNo == "7") || (pageNo == "8") || (pageNo == "10") || (pageNo == "5") || (pageNo == "6")) {
+
         if (M == 0) {
           RFIDpageNo = pageNo;
           M = 1;
         }
-        pageShift(6);  //Page 20 (Tryagain Page)
+        pageShift6();  //Page 20 (Tryagain Page)
       }
       dataReceived_result = false;
     }
@@ -677,12 +751,20 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
 
     if ((dataa == supervisorRFID) && ((pageNo == "7") || (pageNo == "8") || (RFIDpageNo == "7") || (RFIDpageNo == "8"))) {
 
-      if (supervisorCheck == 0) {
+      if ((supervisorCheck == 0) && ((pageNo == "7") || (RFIDpageNo == "7"))) {
 
         M = 0;
         sR = 0;
         String sRR = String(sR);
         writeFile(SD, "/25.txt", sRR.c_str()); /*SD Save*/
+
+        SuMe = 1;
+        String SuMe_M = String(SuMe);
+        writeFile(SD, "/72.txt", SuMe_M.c_str()); /*SD Save*/
+
+        SuMe_memo = 1;
+        String SuMe_memo_M = String(SuMe_memo);
+        writeFile(SD, "/73.txt", SuMe_memo_M.c_str()); /*SD Save*/
 
         RFIDpageNo = "";
         supervisorCheck = 1;
@@ -718,31 +800,55 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
         delay(2000);
 
         if (GOR_M == 1) {
-          setLEDs(1,0,255,0);
+          leds[0] = CRGB(0, 255, 0);
+          FastLED.show();
+          leds[1] = CRGB(0, 255, 0);
+          FastLED.show();
         }
         if (GOR_M == 2) {
-          setLEDs(1,255,165,0);
+          leds[0] = CRGB(255, 165, 0);
+          FastLED.show();
+          leds[1] = CRGB(255, 165, 0);
+          FastLED.show();
         }
         if (GOR_M == 3) {
-          setLEDs(1,255,0,0);
+          leds[0] = CRGB(255, 0, 0);
+          FastLED.show();
+          leds[1] = CRGB(255, 0, 0);
+          FastLED.show();
         }
 
 
         /* NODE RED */
+        send_SUBreakStartTS(OperatorID, dateTime);  // Send supervisor break start timestamp
         set_staffSession(sessionId_S, SuEmployeeId, obbOperationId, "t", dateTime);
         set_LogStatus(verifiedKey, machineId, SuEmployeeId, "login");
 
 
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
 
-        pageShift(3);  // Page 16 (Issue in progress)
+        uint8_t data2[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data2[i]);
+        }
 
-      } else if (supervisorCheck == 1) {
+        pageShift3();  // Page 16 (Issue in progress)
+
+      } else if ((supervisorCheck == 1) && ((pageNo == "8") || (RFIDpageNo == "8"))) {
         M = 0;
         RFIDpageNo = "";
         supervisorCheck = 0;
+
+        SuMe = 0;
+        String SuMe_M = String(SuMe);
+        writeFile(SD, "/72.txt", SuMe_M.c_str()); /*SD Save*/
+
+        SuMe_memo = 0;
+        String SuMe_memo_M = String(SuMe_memo);
+        writeFile(SD, "/73.txt", SuMe_memo_M.c_str()); /*SD Save*/
 
         time_t epochTime = timeClient.getEpochTime();
         struct tm *ptm = gmtime((time_t *)&epochTime);
@@ -763,10 +869,11 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
         String dateTime = currentDate + " " + Time;
 
         /* NODE RED */
+        send_SUBreakEndTS(OperatorID, dateTime);  // Send supervisor break end timestamp
         append_staffSession(sessionId_S, dateTime);
         set_LogStatus(verifiedKey, machineId, SuEmployeeId, "logout");
 
-        pageShift(1);  // Page 02 (Main page)
+        pageShift1();  // Page 02 (Main page)
       }
     } else if ((dataa == supervisorRFID) && ((pageNo == "10") || (RFIDpageNo == "10"))) {
 
@@ -776,8 +883,8 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
         autoModeButton = 0;
         String autoM = "A";
 
-        send_text(6,autoM);
-        send_text(6,autoM);
+        send_text6(autoM);
+        send_text6(autoM);
 
         String autoCM = String(autoCountMode);
         writeFile(SD, "/27.txt", autoCM.c_str()); /*SD Save*/
@@ -787,21 +894,21 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
         autoCountMode = 0;
         manualModeButton = 0;
         String manualM = "M";
-        send_text(6,manualM);
-        send_text(6,manualM);
+        send_text6(manualM);
+        send_text6(manualM);
 
         String autoCM = String(autoCountMode);
         writeFile(SD, "/27.txt", autoCM.c_str()); /*SD Save*/
       }
 
-      pageShift(1);  // Page 02 (Main page)
+      pageShift1();  // Page 02 (Main page)
 
-    } else if((pageNo == "5") || (pageNo == "6")|| (pageNo == "1") || (pageNo == "9")) {
+    } else if ((pageNo == "5") || (pageNo == "6") || (pageNo == "1") || (pageNo == "9")) {
       if (M == 0) {
         RFIDpageNo = pageNo;
         M = 1;
       }
-      pageShift(6);  //Page 20 (Tryagain Page)
+      pageShift6();  //Page 20 (Tryagain Page)
     }
 
   }
@@ -814,15 +921,25 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
 
     if ((dataa == mechanicRFID) && ((pageNo == "5") || (pageNo == "6") || (RFIDpageNo == "5") || (RFIDpageNo == "6"))) {
 
-      if (mechanicCheck == 0) {
-
+      if ((mechanicCheck == 0) && ((pageNo == "5") || (RFIDpageNo == "5"))) {
         M = 0;
         mR = 0;
         String mRR = String(mR);
         writeFile(SD, "/28.txt", mRR.c_str()); /*SD Save*/
 
+        SuMe = 1;
+        String SuMe_M = String(SuMe);
+        writeFile(SD, "/72.txt", SuMe_M.c_str()); /*SD Save*/
+
+        SuMe_memo = 2;
+        String SuMe_memo_M = String(SuMe_memo);
+        writeFile(SD, "/73.txt", SuMe_memo_M.c_str()); /*SD Save*/
+
         RFIDpageNo = "";
+
         mechanicCheck = 1;
+        String mechanicCheck_M = String(mechanicCheck);
+        writeFile(SD, "/74.txt", mechanicCheck_M.c_str()); /*SD Save*/
 
         mech_endTime = millis();
         mech_diff = mech_endTime - mech_startTime;
@@ -853,31 +970,54 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
 
         delay(2000);
         if (GOR_M == 1) {
-          setLEDs(1,0,255,0);
+          leds[0] = CRGB(0, 255, 0);
+          FastLED.show();
+          leds[1] = CRGB(0, 255, 0);
+          FastLED.show();
         }
         if (GOR_M == 2) {
-          setLEDs(1,255,165,0);
+          leds[0] = CRGB(255, 165, 0);
+          FastLED.show();
+          leds[1] = CRGB(255, 165, 0);
+          FastLED.show();
         }
         if (GOR_M == 3) {
-          setLEDs(1,255,0,0);
+          leds[0] = CRGB(255, 0, 0);
+          FastLED.show();
+          leds[1] = CRGB(255, 0, 0);
+          FastLED.show();
         }
 
         /* NODE RED */
+        send_MEBreakStartTS(OperatorID, dateTime);  // Send mechanic break start timestamp
         set_staffSession(sessionId_M, MeEmployeeId, obbOperationId, "t", dateTime);
         set_LogStatus(verifiedKey, machineId, MeEmployeeId, "login");
 
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
 
-        pageShift(4);  // Page 17 (Repair in progress)
+        uint8_t data2[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data2[i]);
+        }
+        pageShift4();  // Page 17 (Repair in progress)
 
       }
 
-      else if (mechanicCheck == 1) {
+      else if ((mechanicCheck == 1) && ((pageNo == "6") || (RFIDpageNo == "6"))) {
         M = 0;
         RFIDpageNo = "";
         mechanicCheck = 0;
+
+        SuMe = 0;
+        String SuMe_M = String(SuMe);
+        writeFile(SD, "/72.txt", SuMe_M.c_str()); /*SD Save*/
+
+        SuMe_memo = 0;
+        String SuMe_memo_M = String(SuMe_memo);
+        writeFile(SD, "/73.txt", SuMe_memo_M.c_str()); /*SD Save*/
 
         time_t epochTime = timeClient.getEpochTime();
         struct tm *ptm = gmtime((time_t *)&epochTime);
@@ -899,41 +1039,43 @@ void checkAccess(String dataa) {  //Function to check if an identified tag is re
 
 
         /* NODE RED */
+        send_MEBreakEndTS(OperatorID, dateTime);  // Send mechanic break end timestamp
         append_staffSession(sessionId_M, dateTime);
         set_LogStatus(verifiedKey, machineId, MeEmployeeId, "logout");
 
-        pageShift(1);  // Page 02 (Main page)
+        pageShift1();  // Page 02 (Main page)
       }
     } else if ((pageNo == "7") || (pageNo == "8") || (pageNo == "10") || (pageNo == "1") || (pageNo == "9")) {
       if (M == 0) {
         RFIDpageNo = pageNo;
         M = 1;
       }
-      pageShift(6);  //Page 20 (Tryagain Page)
+      pageShift6();  //Page 20 (Tryagain Page)
     }
   }
 }
 
 
 void loop() {
-  
+
+  //timeClient.update();
   checker();  //Page and button function checker
   displayDWIN();
-
 }
 
 /**** RFID Card Reading Function ****/
-void displayDWIN() { 
+void displayDWIN() {
 
   /**** Main page functions ****/
   if (pageNo == "2") {  //Main Page function
     unsigned long currentMillis = millis();
     if (currentMillis - previousMillis >= ctThreadInterval) {
-        previousMillis = currentMillis;
-        ctThread();        
-    }          
-    
+      previousMillis = currentMillis;
+      ctThread();
+    }
+
     errorS = 1;
+    memStd = 1;
     time_t epochTime = timeClient.getEpochTime();
     struct tm *ptm = gmtime(&localEpochTime);
     int monthDay = ptm->tm_mday;
@@ -943,10 +1085,9 @@ void displayDWIN() {
     Time1 = String(timeClient.getFormattedTime());
 
     dateTime1 = String(currentDate) + " " + String(Time1);
-
     onTheHour();  //Efficiency meter
+    send_text2(Time1);
 
-    send_text(2,Time1);
     return;
   }
 
@@ -981,7 +1122,7 @@ void displayDWIN() {
   else if (pageNo == "27") {
     hmiButtonFlag = true;
     delay(300);
-    pageShift(1);
+    pageShift1();
   }
 
   /*** Reset function ***/
@@ -989,7 +1130,7 @@ void displayDWIN() {
 
     setTrainingMode(trainingNum);
     delay(350);
-    pageShift(1);
+    pageShift1();
   }
 
   /**** Mechanic call function ****/
@@ -1043,20 +1184,28 @@ void displayDWIN() {
     mech_startTime = millis();
 
     uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };  // Mechanic icon change to green color
-    sendCommand(data1);
-    sendCommand(data1);
-    sendCommand(data1);
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data1[i]);
+    }
+    uint8_t data2[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };  // Mechanic icon change to green color
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data2[i]);
+    }
+    uint8_t data3[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };  // Mechanic icon change to green color
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data2[i]);
+    }
 
     M_mem = 1;
     String mmem = String(M_mem);
     writeFile(SD, "/29.txt", mmem.c_str()); /*SD Save*/
 
-    pageShift(1);
+    pageShift1();
     return;
   }
 
   else if ((pageNo == "18") && (mR != 0)) {
-    pageShift(1);
+    pageShift1();
   }
 
   /**** supervisor call function ****/
@@ -1108,34 +1257,72 @@ void displayDWIN() {
     sup_startTime = millis();
 
     uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
-    sendCommand(data1);
-    sendCommand(data1);
-    sendCommand(data1);
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data1[i]);
+    }
+
+    uint8_t data2[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data2[i]);
+    }
+
+    uint8_t data3[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data2[i]);
+    }
 
     S_mem = 1;
     String smem = String(S_mem);
     writeFile(SD, "/26.txt", smem.c_str()); /*SD Save*/
 
-    pageShift(1);
+    pageShift1();
     return;
   }
 
   else if ((pageNo == "19") && (sR != 0)) {
-    pageShift(1);
+    pageShift1();
   }
 
-  /***Standard time counting function***/
+  /***Standard time starting function***/
   else if (pageNo == "20") {
 
     if (memStd == 1) {
+
+      time_t epochTime = timeClient.getEpochTime();
+      struct tm *ptm = gmtime((time_t *)&epochTime);
+      int monthDay = ptm->tm_mday;
+      int currentMonth = ptm->tm_mon + 1;
+      int currentYear = ptm->tm_year + 1900;
+      String currentDate = String(currentYear) + "-" + String(currentMonth) + "-" + String(monthDay);
+      String Time = String(timeClient.getFormattedTime());
+      String dateTime = String(currentDate) + " " + String(Time);
+
+      send_OffstandStartTS(OperatorID, dateTime);  // Send offstand start timestamp
+
       memStd = 0;
     }
 
+
   }
 
+  /***Standard time stoping function***/
   else if (buttonNo == "1000") {
 
-    pageShift(1);
+    pageShift5();
+    delay(1000);
+
+    time_t epochTime = timeClient.getEpochTime();
+    struct tm *ptm = gmtime((time_t *)&epochTime);
+    int monthDay = ptm->tm_mday;
+    int currentMonth = ptm->tm_mon + 1;
+    int currentYear = ptm->tm_year + 1900;
+    String currentDate = String(currentYear) + "-" + String(currentMonth) + "-" + String(monthDay);
+    String Time = String(timeClient.getFormattedTime());
+    String dateTime = String(currentDate) + " " + String(Time);
+
+    send_OffstandEndTS(OperatorID, dateTime);  // Send offstand end timestamp
+
+    pageShift1();
 
   }
 
@@ -1174,7 +1361,7 @@ void displayDWIN() {
     /* NODE RED */
     if (fnCall_colour) {
       get_light_colour(obbOperationId, RoundTLS, date, deviceId);
-      pageShift(5);
+      pageShift5();
       delay(3000);
       client.loop();
       client.loop();
@@ -1195,21 +1382,30 @@ void displayDWIN() {
     if (dataReceived_colour) {
 
       if (colourTLS == "green") {
-        setLEDs(1,0,255,0);
+        leds[0] = CRGB(0, 255, 0);
+        FastLED.show();
+        leds[1] = CRGB(0, 255, 0);
+        FastLED.show();
 
         GOR_M = 1;
         String gor_M = String(GOR_M);
         writeFile(SD, "/39.txt", gor_M.c_str()); /*SD Save*/
 
       } else if (colourTLS == "orange") {
-        setLEDs(1,255,165,0);
+        leds[0] = CRGB(255, 165, 0);
+        FastLED.show();
+        leds[1] = CRGB(255, 165, 0);
+        FastLED.show();
 
         GOR_M = 2;
         String gor_M = String(GOR_M);
         writeFile(SD, "/39.txt", gor_M.c_str()); /*SD Save*/
 
       } else if (colourTLS == "red") {
-        setLEDs(1,255,0,0);
+        leds[0] = CRGB(255, 0, 0);
+        FastLED.show();
+        leds[1] = CRGB(255, 0, 0);
+        FastLED.show();
 
         GOR_M = 3;
         String gor_M = String(GOR_M);
@@ -1221,7 +1417,7 @@ void displayDWIN() {
       errorL = 0;
       String errorLoad = String(errorL);
       writeFile(SD, "/66.txt", errorLoad.c_str()); /*SD Save*/
-      pageShift(1);
+      pageShift1();
     }
   }
 
@@ -1230,9 +1426,9 @@ void displayDWIN() {
   else if (buttonNo == "1360") {
 
     if (EXIT_Table == 0) {
-      pageShift(7);  // Page 01 (Operator login page)
+      pageShift7();  // Page 01 (Operator login page)
     } else if (EXIT_Table == 1) {
-      pageShift(13);  // Page 03 (Help page)
+      pageShift13();  // Page 03 (Help page)
     }
   }
 
@@ -1249,7 +1445,7 @@ void displayDWIN() {
 
     autoModeButton = 1;
 
-    pageShift(14);
+    pageShift14();
   }
 
 
@@ -1258,7 +1454,7 @@ void displayDWIN() {
 
     manualModeButton = 1;
 
-    pageShift(14);
+    pageShift14();
   }
 
 
@@ -1284,6 +1480,8 @@ void displayDWIN() {
     String Time = String(timeClient.getFormattedTime());
     String dateTime = String(currentDate) + " " + String(Time);
 
+    send_LunchBreakStartTS(OperatorID, dateTime);  // Send lunch break start timestamp
+
     writeFile(SD, "/36.txt", Time.c_str()); /*SD Save*/
 
     String bStartTime = "breakStartTime";
@@ -1291,14 +1489,14 @@ void displayDWIN() {
     operatorBreakStart = 0;
     operatorBreakStart = millis();
 
-    pageShift(17);
-    pageShift(17);
+    pageShift17();
+    pageShift17();
   }
 
   /**** VP 3200 Stop break time ****/
   else if (buttonNo == "500") {
 
-    pageShift(5);
+    pageShift5();
     delay(1000);
 
     BreakCheck = 0;
@@ -1316,6 +1514,8 @@ void displayDWIN() {
     String Time = String(timeClient.getFormattedTime());
     String dateTime = String(currentDate) + " " + String(Time);
 
+    send_LunchBreakEndTS(OperatorID, dateTime);  // Send lunch break end timestamp
+
     String bStopTime = "breakStopTime";
 
     operatorBreakEnd = 0;
@@ -1330,55 +1530,64 @@ void displayDWIN() {
       Diff2 = oper_diff;
       BreakOVER = 0;
     }
-    pageShift(1);
+    pageShift1();
   }
 
   /**** VP 8200 Tryagain cancel button ****/
   else if (buttonNo == "1300") {
 
     if (RFIDpageNo == "1") {  // Operator login
-      pageShift(7);           // Page 01 (Operaor login page)
+      pageShift7();           // Page 01 (Operaor login page)
       //RFIDpageNo = "";
     }
 
     else if (RFIDpageNo == "9") {  // Operator logout
-      pageShift(12);               // Page 13 (Operator Logout)
+      pageShift12();               // Page 13 (Operator Logout)
       //RFIDpageNo = "";
     }
 
     else if (RFIDpageNo == "5") {  // Mechanic login
-      pageShift(10);               // Page 9 (Mechanic Login)
+      pageShift10();               // Page 9 (Mechanic Login)
       //RFIDpageNo = "";
     }
 
     else if (RFIDpageNo == "6") {  //  Mechanic logout
-      pageShift(20);               // Page 06 (Mechanic logout)
+      pageShift20();               // Page 06 (Mechanic logout)
     }
 
     else if (RFIDpageNo == "7") {  // Supervisor login
-      pageShift(11);               // Page 11 (Supervisor Login)
+      pageShift11();               // Page 11 (Supervisor Login)
       //RFIDpageNo = "";
     }
 
     else if (RFIDpageNo == "8") {  // Supervisor logout
-      pageShift(19);               // Page 08 (Supervisor logout)
+      pageShift19();               // Page 08 (Supervisor logout)
     }
 
     else if (pageNo == "10") {  // Supervisor mode confirm
-      pageShift(14);            // Page 05 (Material Not available page)
+      pageShift14();            // Page 05 (Material Not available page)
     }
   }
 
 
   /**** Change operation ****/
   else if (buttonNo == "800") {
-    pageShift(5);
+    pageShift5();
 
     M_mem = 0;
     S_mem = 0;
 
-    setLEDs(0,0,0,0);
-    setLEDs(1,0,0,0);    
+    leds[0] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[1] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[2] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 0, 0);
+    FastLED.show();
 
     deleteFile(SD, "/1.txt");
     deleteFile(SD, "/2.txt");
@@ -1429,27 +1638,48 @@ void displayDWIN() {
     deleteFile(SD, "/68.txt");
     deleteFile(SD, "/68.txt");
     deleteFile(SD, "/69.txt");
+    deleteFile(SD, "/72.txt");
+    deleteFile(SD, "/73.txt");
+    deleteFile(SD, "/74.txt");
 
 
     opChangeM = 1;
     String opChange_M = String(opChangeM);
     writeFile(SD, "/71.txt", opChange_M.c_str()); /*SD Save*/
 
+    leds[0] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[1] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[2] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 0, 0);
+    FastLED.show();
+
+
 
     uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };  // Supervisor green color icon change
-    sendCommand(data1);
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data1[i]);
+    }
 
     uint8_t data2[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };  // Mechanic green color icon change
-    sendCommand(data2);
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data2[i]);
+    }
 
     uint8_t data3[] = { 0x5A, 0xA5, 0x05, 0x82, 0x18, 0x00, 0x00, 0x00 };  // Efficiency meter
-    sendCommand(data3);
-
+    for (size_t i = 0; i < 8; i++) {
+      Serial2.write(data3[i]);
+    }
     String NEW_Val = "0";
-    send_text(4,NEW_Val);
+    send_text4(NEW_Val);
 
-    pageShift(2);
-    pageShift(2);
+    pageShift2();
+    pageShift2();
 
     ESP.restart();
   }
@@ -1467,17 +1697,27 @@ void displayDWIN() {
     deleteFile(SD, "/63.txt");
 
 
-    pageShift(7);
-    pageShift(7);
+    pageShift7();
+    pageShift7();
   }
 
 
   /**** shutdown function ****/
   else if (buttonNo == "810") {
-    pageShift(5);
+    pageShift5();
 
-    setLEDs(0,0,0,0);
-    setLEDs(1,0,0,0);
+
+    leds[0] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[1] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[2] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 0, 0);
+    FastLED.show();
 
     deleteFile(SD, "/1.txt");
     deleteFile(SD, "/2.txt");
@@ -1549,13 +1789,27 @@ void displayDWIN() {
     deleteFile(SD, "/69.txt");
     deleteFile(SD, "/70.txt");
     deleteFile(SD, "/71.txt");
+    deleteFile(SD, "/72.txt");
+    deleteFile(SD, "/73.txt");
 
+
+    leds[0] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[1] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[2] = CRGB(0, 0, 0);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 0, 0);
+    FastLED.show();
 
     M_mem = 0;
     S_mem = 0;
 
-    pageShift(16);
-    pageShift(16);
+    pageShift16();
+    pageShift16();
   }
 
 
@@ -1569,14 +1823,14 @@ void displayDWIN() {
       readFile(SD, "/1.txt"); /*SD Read*/
       smv = rdline.toInt();
       String smv_SD = String(smv);
-      send_text(9,smv_SD);
-      send_text(9,smv_SD);
+      send_text9(smv_SD);
+      send_text9(smv_SD);
 
       readFile(SD, "/2.txt"); /*SD Read*/
       spi = rdline.toInt();
       String spi_SD = String(spi);
-      send_text(10,spi_SD);
-      send_text(10,spi_SD);
+      send_text10(spi_SD);
+      send_text10(spi_SD);
 
       readFile(SD, "/3.txt"); /*SD Read*/
       workingHr = rdline.toInt();
@@ -1593,41 +1847,43 @@ void displayDWIN() {
       readFile(SD, "/6.txt"); /*SD Read*/
       target = rdline.toInt();
       Tar = target;
+      send_text3(rdline);
+      send_text3(rdline);
 
       readFile(SD, "/7.txt"); /*SD Read*/
       machineId = rdline;
-      send_text(20,machineId);
+      send_text20(machineId);
 
       readFile(SD, "/8.txt"); /*SD Read*/
       machineType = rdline;
-      send_text(7,machineType);
-      send_text(7,machineType);
+      send_text7(machineType);
+      send_text7(machineType);
 
       readFile(SD, "/9.txt"); /*SD Read*/
       ownership = rdline;
-      send_text(8,ownership);
-      send_text(8,ownership);
+      send_text8(ownership);
+      send_text8(ownership);
 
       readFile(SD, "/10.txt"); /*SD Read*/
       obbOperationId = rdline;
 
       readFile(SD, "/11.txt"); /*SD Read*/
       style = rdline;
-      send_text(14,style);
-      send_text(14,style);
+      send_text14(style);
+      send_text14(style);
 
       readFile(SD, "/12.txt"); /*SD Read*/
       supervisorName = rdline;
-      send_text(17,supervisorName);
-      send_text(17,supervisorName);
+      send_text17(supervisorName);
+      send_text17(supervisorName);
 
       readFile(SD, "/13.txt"); /*SD Read*/
       supervisorRFID = rdline;
 
       readFile(SD, "/14.txt"); /*SD Read*/
       mechanicName = rdline;
-      send_text(16,mechanicName);
-      send_text(16,mechanicName);
+      send_text16(mechanicName);
+      send_text16(mechanicName);
 
       readFile(SD, "/15.txt"); /*SD Read*/
       mechanicRFID = rdline;
@@ -1640,19 +1896,19 @@ void displayDWIN() {
 
       readFile(SD, "/18.txt"); /*SD Read*/
       qualityInsName = rdline;
-      send_text(18,qualityInsName);
-      send_text(18,qualityInsName);
+      send_text18(qualityInsName);
+      send_text18(qualityInsName);
 
       readFile(SD, "/19.txt"); /*SD Read*/
       operationName = rdline;
-      send_text(15,operationName);
+      send_text15(operationName);
 
       readFile(SD, "/20.txt"); /*SD Read*/
       productionLine = rdline;
-      send_text(13,productionLine);
+      send_text13(productionLine);
 
-      send_text(19,deviceId);
-      send_text(19,deviceId);
+      send_text19(deviceId);
+      send_text19(deviceId);
 
       readFile(SD, "/54.txt"); /*SD Read*/
       t = rdline.toInt();
@@ -1671,12 +1927,12 @@ void displayDWIN() {
 
       readFile(SD, "/49.txt");
       N = rdline.toInt();
-      send_text(4,rdline);
-      send_text(4,rdline);
+      send_text4(rdline);
+      send_text4(rdline);
       if (N == 0) {
         String Nstr = "0";
-        send_text(4,Nstr);
-        send_text(4,Nstr);
+        send_text4(Nstr);
+        send_text4(Nstr);
       }
 
       readFile(SD, "/45.txt");
@@ -1690,16 +1946,16 @@ void displayDWIN() {
 
       int Lvalue = L + 1;
       String Ldata = String(Lvalue);
-      send_text(23,Ldata);
-      send_text(23,Ldata);
+      send_text23(Ldata);  //L+1
+      send_text23(Ldata);
 
       readFile(SD, "/48.txt");
       proTar = rdline.toInt();
 
-      readFile(SD, "/50.txt");
-      HrTar = rdline.toInt();
-      send_text(3,rdline);
-      send_text(3,rdline);
+      //readFile(SD, "/50.txt");
+      //HrTar = rdline.toInt();
+      //send_text3(rdline);
+      //send_text3(rdline);
 
       readFile(SD, "/60.txt");
       EFF_RGB_MEM = rdline.toInt();
@@ -1754,22 +2010,30 @@ void displayDWIN() {
 
       if (sR == 0) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (sR == 1) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (mR == 0) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (mR == 1) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       readFile(SD, "/62.txt");
@@ -1783,16 +2047,31 @@ void displayDWIN() {
       if (ReadDone == 0) {
         GOR_M = 0;
       }
- 
+
       if (GOR_M == 1) {
-          setLEDs(1,0,255,0);
-        }
-        if (GOR_M == 2) {
-          setLEDs(1,255,165,0);
-        }
-        if (GOR_M == 3) {
-          setLEDs(1,255,0,0);
-        }
+
+        leds[0] = CRGB(0, 255, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(0, 255, 0);
+        FastLED.show();
+      }
+      if (GOR_M == 2) {
+
+        leds[0] = CRGB(255, 165, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 165, 0);
+        FastLED.show();
+      }
+      if (GOR_M == 3) {
+
+        leds[0] = CRGB(255, 0, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 0, 0);
+        FastLED.show();
+      }
 
       readFile(SD, "/31.txt"); /*SD Read*/
       TimeME = rdline;
@@ -1814,14 +2093,14 @@ void displayDWIN() {
 
       if (autoCountMode == 1) {
         String autoM = "A";
-        send_text(6,autoM);
-        send_text(6,autoM);
+        send_text6(autoM);
+        send_text6(autoM);
       }
 
       if (autoCountMode == 0) {
         String manualM = "M";
-        send_text(6,manualM);
-        send_text(6,manualM);
+        send_text6(manualM);
+        send_text6(manualM);
       }
 
 
@@ -1842,8 +2121,8 @@ void displayDWIN() {
 
       Serial.println("/**** Change operator end ****/");
 
-      pageShift(7);
-      pageShift(7);
+      pageShift7();
+      pageShift7();
     }
 
     else if ((pageNo == "0") && (attendanceOp == 1) && (errorS == 0) && (BreakCheck == 0) && (opChangeM == 1)) {
@@ -1880,33 +2159,33 @@ void displayDWIN() {
         Serial.print("machineId = ");
         Serial.println(machineId);
         writeFile(SD, "/7.txt", machineId.c_str()); /*SD Save*/
-        send_text(20,machineId);
+        send_text20(machineId);
 
         Serial.print("machineType = ");
         Serial.println(machineType);
         writeFile(SD, "/8.txt", machineType.c_str()); /*SD Save*/
-        send_text(7,machineType);
-        send_text(7,machineType);
+        send_text7(machineType);
+        send_text7(machineType);
 
         Serial.print("ownership = ");
         Serial.println(ownership);
         writeFile(SD, "/9.txt", ownership.c_str()); /*SD Save*/
-        send_text(8,ownership);
-        send_text(8,ownership);
+        send_text8(ownership);
+        send_text8(ownership);
 
         Serial.print("smv = ");
         Serial.println(smv);
         String smv_SD = String(smv);
         writeFile(SD, "/1.txt", smv_SD.c_str()); /*SD Save*/
-        send_text(9,smv_SD);
-        send_text(9,smv_SD);
+        send_text9(smv_SD);
+        send_text9(smv_SD);
 
         Serial.print("spi = ");
         Serial.println(spi);
         String spi_SD = String(spi);
         writeFile(SD, "/2.txt", spi_SD.c_str()); /*SD Save*/
-        send_text(10,spi_SD);
-        send_text(10,spi_SD);
+        send_text10(spi_SD);
+        send_text10(spi_SD);
 
         Serial.print("target = ");
         Serial.println(target);
@@ -1915,8 +2194,8 @@ void displayDWIN() {
         String target_SD = String(target);
         writeFile(SD, "/6.txt", target_SD.c_str());  /*SD Save*/
         writeFile(SD, "/50.txt", target_SD.c_str()); /*SD Save*/
-        send_text(3,target_SD);
-        send_text(3,target_SD);
+        send_text3(target_SD);
+        send_text3(target_SD);
 
         Serial.print("workingHours = ");
         Serial.println(workingHours);
@@ -1944,13 +2223,13 @@ void displayDWIN() {
         Serial.print("style = ");
         Serial.println(style);
         writeFile(SD, "/11.txt", style.c_str()); /*SD Save*/
-        send_text(14,style);
-        send_text(14,style);
+        send_text14(style);
+        send_text14(style);
 
         Serial.print("operationName = ");
         Serial.println(operationName);
         writeFile(SD, "/19.txt", operationName.c_str()); /*SD Save*/
-        send_text(15,operationName);
+        send_text15(operationName);
 
         Serial.print("SuEmployeeId = ");
         Serial.println(SuEmployeeId);
@@ -1963,14 +2242,14 @@ void displayDWIN() {
         Serial.print("supervisorName = ");
         Serial.println(supervisorName);
         writeFile(SD, "/12.txt", supervisorName.c_str()); /*SD Save*/
-        send_text(17,supervisorName);
-        send_text(17,supervisorName);
+        send_text17(supervisorName);
+        send_text17(supervisorName);
 
         Serial.print("mechanicName = ");
         Serial.println(mechanicName);
         writeFile(SD, "/14.txt", mechanicName.c_str()); /*SD Save*/
-        send_text(16,mechanicName);
-        send_text(16,mechanicName);
+        send_text16(mechanicName);
+        send_text16(mechanicName);
 
         Serial.print("MeEmployeeId = ");
         Serial.println(MeEmployeeId);
@@ -1983,21 +2262,21 @@ void displayDWIN() {
         Serial.print("qualityInsName = ");
         Serial.println(qualityInsName);
         writeFile(SD, "/18.txt", qualityInsName.c_str()); /*SD Save*/
-        send_text(18,qualityInsName);
-        send_text(18,qualityInsName);
+        send_text18(qualityInsName);
+        send_text18(qualityInsName);
 
         Serial.print("productionLine = ");
         Serial.println(productionLine);
         writeFile(SD, "/20.txt", productionLine.c_str()); /*SD Save*/
-        send_text(13,productionLine);
+        send_text13(productionLine);
 
         readFile(SD, "/24.txt"); /*SD Read*/
         OperatorID = rdline;
-        send_text(1,OperatorID);
-        send_text(1,OperatorID);
+        send_text1(OperatorID);
+        send_text1(OperatorID);
 
-        send_text(19,deviceId);
-        send_text(19,deviceId);
+        send_text19(deviceId);
+        send_text19(deviceId);
 
 
         readFile(SD, "/47.txt");
@@ -2005,8 +2284,8 @@ void displayDWIN() {
 
         int Lvalue = L + 1;
         String Ldata = String(Lvalue);
-        send_text(23,Ldata);
-        send_text(23,Ldata);
+        send_text23(Ldata);  //L+1
+        send_text23(Ldata);
 
 
         readFile(SD, "/34.txt");
@@ -2053,22 +2332,30 @@ void displayDWIN() {
 
         if (sR == 0) {
           uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };
-          sendCommand(data1);
+          for (size_t i = 0; i < 8; i++) {
+            Serial2.write(data1[i]);
+          }
         }
 
         if (sR == 1) {
           uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
-          sendCommand(data1);
+          for (size_t i = 0; i < 8; i++) {
+            Serial2.write(data1[i]);
+          }
         }
 
         if (mR == 0) {
           uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };
-          sendCommand(data1);
+          for (size_t i = 0; i < 8; i++) {
+            Serial2.write(data1[i]);
+          }
         }
 
         if (mR == 1) {
           uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };
-          sendCommand(data1);
+          for (size_t i = 0; i < 8; i++) {
+            Serial2.write(data1[i]);
+          }
         }
 
 
@@ -2079,13 +2366,28 @@ void displayDWIN() {
         }
 
         if (GOR_M == 1) {
-          setLEDs(1,0,255,0);
+
+          leds[0] = CRGB(0, 255, 0);
+          FastLED.show();
+
+          leds[1] = CRGB(0, 255, 0);
+          FastLED.show();
         }
         if (GOR_M == 2) {
-          setLEDs(1,255,165,0);
+
+          leds[0] = CRGB(255, 165, 0);
+          FastLED.show();
+
+          leds[1] = CRGB(255, 165, 0);
+          FastLED.show();
         }
         if (GOR_M == 3) {
-          setLEDs(1,255,0,0);
+
+          leds[0] = CRGB(255, 0, 0);
+          FastLED.show();
+
+          leds[1] = CRGB(255, 0, 0);
+          FastLED.show();
         }
 
         readFile(SD, "/31.txt"); /*SD Read*/
@@ -2108,13 +2410,13 @@ void displayDWIN() {
         timeStr1 = rdline;
 
         readFile(SD, "/63.txt");
-        sessionId_O = rdline.toInt();
+        sessionId_O = rdline;
 
         readFile(SD, "/64.txt");
-        sessionId_S = rdline.toInt();
+        sessionId_S = rdline;
 
         readFile(SD, "/65.txt");
-        sessionId_M = rdline.toInt();
+        sessionId_M = rdline;
 
 
         readFile(SD, "/27.txt"); /*SD Read*/
@@ -2122,21 +2424,21 @@ void displayDWIN() {
 
         if (autoCountMode == 1) {
           String autoM = "A";
-          send_text(6,autoM);
-          send_text(6,autoM);
+          send_text6(autoM);
+          send_text6(autoM);
         }
 
         if (autoCountMode == 0) {
           String manualM = "ML";
-          send_text(6,manualM);
-          send_text(6,manualM);
+          send_text6(manualM);
+          send_text6(manualM);
         }
 
         readFile(SD, "/70.txt");
         Hour_Z = rdline.toInt();
 
-        pageShift(1);
-        pageShift(1);
+        pageShift1();
+        pageShift1();
 
         dataReceived_initial_data = false;
       }
@@ -2155,14 +2457,14 @@ void displayDWIN() {
       readFile(SD, "/1.txt"); /*SD Read*/
       smv = rdline.toInt();
       String smv_SD = String(smv);
-      send_text(9,smv_SD);
-      send_text(9,smv_SD);
+      send_text9(smv_SD);
+      send_text9(smv_SD);
 
       readFile(SD, "/2.txt"); /*SD Read*/
       spi = rdline.toInt();
       String spi_SD = String(spi);
-      send_text(10,spi_SD);
-      send_text(10,spi_SD);
+      send_text10(spi_SD);
+      send_text10(spi_SD);
 
       readFile(SD, "/3.txt"); /*SD Read*/
       workingHr = rdline.toInt();
@@ -2179,41 +2481,43 @@ void displayDWIN() {
       readFile(SD, "/6.txt"); /*SD Read*/
       target = rdline.toInt();
       Tar = target;
+      send_text3(rdline);
+      send_text3(rdline);
 
       readFile(SD, "/7.txt"); /*SD Read*/
       machineId = rdline;
-      send_text(20,machineId);
+      send_text20(machineId);
 
       readFile(SD, "/8.txt"); /*SD Read*/
       machineType = rdline;
-      send_text(7,machineType);
-      send_text(7,machineType);
+      send_text7(machineType);
+      send_text7(machineType);
 
       readFile(SD, "/9.txt"); /*SD Read*/
       ownership = rdline;
-      send_text(8,ownership);
-      send_text(8,ownership);
+      send_text8(ownership);
+      send_text8(ownership);
 
       readFile(SD, "/10.txt"); /*SD Read*/
       obbOperationId = rdline;
 
       readFile(SD, "/11.txt"); /*SD Read*/
       style = rdline;
-      send_text(14,style);
-      send_text(14,style);
+      send_text14(style);
+      send_text14(style);
 
       readFile(SD, "/12.txt"); /*SD Read*/
       supervisorName = rdline;
-      send_text(17,supervisorName);
-      send_text(17,supervisorName);
+      send_text17(supervisorName);
+      send_text17(supervisorName);
 
       readFile(SD, "/13.txt"); /*SD Read*/
       supervisorRFID = rdline;
 
       readFile(SD, "/14.txt"); /*SD Read*/
       mechanicName = rdline;
-      send_text(16,mechanicName);
-      send_text(16,mechanicName);
+      send_text16(mechanicName);
+      send_text16(mechanicName);
 
       readFile(SD, "/15.txt"); /*SD Read*/
       mechanicRFID = rdline;
@@ -2226,24 +2530,24 @@ void displayDWIN() {
 
       readFile(SD, "/18.txt"); /*SD Read*/
       qualityInsName = rdline;
-      send_text(18,qualityInsName);
-      send_text(18,qualityInsName);
+      send_text18(qualityInsName);
+      send_text18(qualityInsName);
 
       readFile(SD, "/19.txt"); /*SD Read*/
       operationName = rdline;
-      send_text(15,operationName);
+      send_text15(operationName);
 
       readFile(SD, "/20.txt"); /*SD Read*/
       productionLine = rdline;
-      send_text(13,productionLine);
+      send_text13(productionLine);
 
       readFile(SD, "/24.txt"); /*SD Read*/
       OperatorID = rdline;
-      send_text(1,OperatorID);
-      send_text(1,OperatorID);
+      send_text1(OperatorID);
+      send_text1(OperatorID);
 
-      send_text(19,deviceId);
-      send_text(19,deviceId);
+      send_text19(deviceId);
+      send_text19(deviceId);
 
       readFile(SD, "/54.txt"); /*SD Read*/
       t = rdline.toInt();
@@ -2262,12 +2566,12 @@ void displayDWIN() {
 
       readFile(SD, "/49.txt");
       N = rdline.toInt();
-      send_text(4,rdline);
-      send_text(4,rdline);
+      send_text4(rdline);
+      send_text4(rdline);
       if (N == 0) {
         String Nstr = "0";
-        send_text(4,Nstr);
-        send_text(4,Nstr);
+        send_text4(Nstr);
+        send_text4(Nstr);
       }
 
       readFile(SD, "/45.txt");
@@ -2281,16 +2585,16 @@ void displayDWIN() {
 
       int Lvalue = L + 1;
       String Ldata = String(Lvalue);
-      send_text(23,Ldata);
-      send_text(23,Ldata);
+      send_text23(Ldata);  //L+1
+      send_text23(Ldata);
 
       readFile(SD, "/48.txt");
       proTar = rdline.toInt();
 
-      readFile(SD, "/50.txt");
-      HrTar = rdline.toInt();
-      send_text(3,rdline);
-      send_text(3,rdline);
+      //readFile(SD, "/50.txt");
+      //HrTar = rdline.toInt();
+      //send_text3(rdline);
+      //send_text3(rdline);
 
       readFile(SD, "/60.txt");
       EFF_RGB_MEM = rdline.toInt();
@@ -2345,22 +2649,30 @@ void displayDWIN() {
 
       if (sR == 0) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (sR == 1) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (mR == 0) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (mR == 1) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       readFile(SD, "/62.txt");
@@ -2376,13 +2688,28 @@ void displayDWIN() {
       }
 
       if (GOR_M == 1) {
-        setLEDs(1,0,255,0);
+
+        leds[0] = CRGB(0, 255, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(0, 255, 0);
+        FastLED.show();
       }
       if (GOR_M == 2) {
-        setLEDs(1,255,165,0);
+
+        leds[0] = CRGB(255, 165, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 165, 0);
+        FastLED.show();
       }
       if (GOR_M == 3) {
-        setLEDs(1,255,0,0);
+
+        leds[0] = CRGB(255, 0, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 0, 0);
+        FastLED.show();
       }
 
       readFile(SD, "/31.txt"); /*SD Read*/
@@ -2426,13 +2753,13 @@ void displayDWIN() {
       }
 
       readFile(SD, "/63.txt");
-      sessionId_O = rdline.toInt();
+      sessionId_O = rdline;
 
       readFile(SD, "/64.txt");
-      sessionId_S = rdline.toInt();
+      sessionId_S = rdline;
 
       readFile(SD, "/65.txt");
-      sessionId_M = rdline.toInt();
+      sessionId_M = rdline;
 
       readFile(SD, "/40.txt"); /*SD Read*/
       buttonPressCount = rdline.toInt();
@@ -2445,14 +2772,14 @@ void displayDWIN() {
 
       if (autoCountMode == 1) {
         String autoM = "A";
-        send_text(6,autoM);
-        send_text(6,autoM);
+        send_text6(autoM);
+        send_text6(autoM);
       }
 
       if (autoCountMode == 0) {
         String manualM = "M";
-        send_text(6,manualM);
-        send_text(6,manualM);
+        send_text6(manualM);
+        send_text6(manualM);
       }
 
 
@@ -2474,30 +2801,29 @@ void displayDWIN() {
 
       Serial.println("/**** Operator after lunch end ****/");
 
-      pageShift(17);
-      pageShift(17);
+      pageShift17();
+      pageShift17();
     }
 
-
-    /**** Network settingup page when device power interrupt happend ****/
-    else if ((pageNo == "0") && (attendanceOp == 1) && (errorS == 0) && (BreakCheck == 0) && (opChangeM == 0)) {
-      Serial.println("/**** Device power interrupt start ****/");
-
+    /**** Network settingup page when Supervisor and mechnic power on ****/
+    else if ((pageNo == "0") && (attendanceOp == 1) && (errorS == 0) && (BreakCheck == 0) && (opChangeM == 0) && (SuMe == 1)) {
+      Serial.println("/**** Supervisor and mechnic power on start ****/");
       MQTT_Reconnect();
+
       EXIT_Table = 1;
       NO_Power = 1;
 
       readFile(SD, "/1.txt"); /*SD Read*/
       smv = rdline.toInt();
       String smv_SD = String(smv);
-      send_text(9,smv_SD);
-      send_text(9,smv_SD);
+      send_text9(smv_SD);
+      send_text9(smv_SD);
 
       readFile(SD, "/2.txt"); /*SD Read*/
       spi = rdline.toInt();
       String spi_SD = String(spi);
-      send_text(10,spi_SD);
-      send_text(10,spi_SD);
+      send_text10(spi_SD);
+      send_text10(spi_SD);
 
       readFile(SD, "/3.txt"); /*SD Read*/
       workingHr = rdline.toInt();
@@ -2514,41 +2840,44 @@ void displayDWIN() {
       readFile(SD, "/6.txt"); /*SD Read*/
       target = rdline.toInt();
       Tar = target;
+      send_text3(rdline);
+      send_text3(rdline);
+
 
       readFile(SD, "/7.txt"); /*SD Read*/
       machineId = rdline;
-      send_text(20,machineId);
+      send_text20(machineId);
 
       readFile(SD, "/8.txt"); /*SD Read*/
       machineType = rdline;
-      send_text(7,machineType);
-      send_text(7,machineType);
+      send_text7(machineType);
+      send_text7(machineType);
 
       readFile(SD, "/9.txt"); /*SD Read*/
       ownership = rdline;
-      send_text(8,ownership);
-      send_text(8,ownership);
+      send_text8(ownership);
+      send_text8(ownership);
 
       readFile(SD, "/10.txt"); /*SD Read*/
       obbOperationId = rdline;
 
       readFile(SD, "/11.txt"); /*SD Read*/
       style = rdline;
-      send_text(14,style);
-      send_text(14,style);
+      send_text14(style);
+      send_text14(style);
 
       readFile(SD, "/12.txt"); /*SD Read*/
       supervisorName = rdline;
-      send_text(17,supervisorName);
-      send_text(17,supervisorName);
+      send_text17(supervisorName);
+      send_text17(supervisorName);
 
       readFile(SD, "/13.txt"); /*SD Read*/
       supervisorRFID = rdline;
 
       readFile(SD, "/14.txt"); /*SD Read*/
       mechanicName = rdline;
-      send_text(16,mechanicName);
-      send_text(16,mechanicName);
+      send_text16(mechanicName);
+      send_text16(mechanicName);
 
       readFile(SD, "/15.txt"); /*SD Read*/
       mechanicRFID = rdline;
@@ -2561,24 +2890,24 @@ void displayDWIN() {
 
       readFile(SD, "/18.txt"); /*SD Read*/
       qualityInsName = rdline;
-      send_text(18,qualityInsName);
-      send_text(18,qualityInsName);
+      send_text18(qualityInsName);
+      send_text18(qualityInsName);
 
       readFile(SD, "/19.txt"); /*SD Read*/
       operationName = rdline;
-      send_text(15,operationName);
+      send_text15(operationName);
 
       readFile(SD, "/20.txt"); /*SD Read*/
       productionLine = rdline;
-      send_text(13,productionLine);
+      send_text13(productionLine);
 
       readFile(SD, "/24.txt"); /*SD Read*/
       OperatorID = rdline;
-      send_text(1,OperatorID);
-      send_text(1,OperatorID);
+      send_text1(OperatorID);
+      send_text1(OperatorID);
 
-      send_text(19,deviceId);
-      send_text(19,deviceId);
+      send_text19(deviceId);
+      send_text19(deviceId);
 
       readFile(SD, "/54.txt"); /*SD Read*/
       t = rdline.toInt();
@@ -2597,12 +2926,12 @@ void displayDWIN() {
 
       readFile(SD, "/49.txt");
       N = rdline.toInt();
-      send_text(4,rdline);
-      send_text(4,rdline);
+      send_text4(rdline);
+      send_text4(rdline);
       if (N == 0) {
         String Nstr = "0";
-        send_text(4,Nstr);
-        send_text(4,Nstr);
+        send_text4(Nstr);
+        send_text4(Nstr);
       }
 
       readFile(SD, "/45.txt");
@@ -2616,16 +2945,16 @@ void displayDWIN() {
 
       int Lvalue = L + 1;
       String Ldata = String(Lvalue);
-      send_text(23,Ldata);  //L+1
-      send_text(23,Ldata);
+      send_text23(Ldata);  //L+1
+      send_text23(Ldata);
 
       readFile(SD, "/48.txt");
       proTar = rdline.toInt();
 
-      readFile(SD, "/50.txt");
-      HrTar = rdline.toInt();
-      send_text(3,rdline);
-      send_text(3,rdline);
+      //readFile(SD, "/50.txt");
+      //HrTar = rdline.toInt();
+      //send_text3(rdline);
+      //send_text3(rdline);
 
       readFile(SD, "/60.txt");
       EFF_RGB_MEM = rdline.toInt();
@@ -2680,22 +3009,30 @@ void displayDWIN() {
 
       if (sR == 0) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (sR == 1) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (mR == 0) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       if (mR == 1) {
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
       }
 
       readFile(SD, "/62.txt");
@@ -2711,13 +3048,399 @@ void displayDWIN() {
       }
 
       if (GOR_M == 1) {
-        setLEDs(1,0,255,0);
+
+        leds[0] = CRGB(0, 255, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(0, 255, 0);
+        FastLED.show();
       }
       if (GOR_M == 2) {
-        setLEDs(1,255,165,0);
+
+        leds[0] = CRGB(255, 165, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 165, 0);
+        FastLED.show();
       }
       if (GOR_M == 3) {
-        setLEDs(1,255,0,0);
+
+        leds[0] = CRGB(255, 0, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 0, 0);
+        FastLED.show();
+      }
+
+      readFile(SD, "/31.txt"); /*SD Read*/
+      TimeME = rdline;
+
+      readFile(SD, "/33.txt"); /*SD Read*/
+      TimeSU = rdline;
+
+      readFile(SD, "/38.txt"); /*SD Read*/
+      RoundTLS = rdline.toInt();
+
+      readFile(SD, "/23.txt");  // Login time
+      timeStr1 = rdline;
+
+      readFile(SD, "/59.txt");  // Efficiency time
+      timeStr2 = rdline;
+
+      readFile(SD, "/36.txt");  // Break start time
+      timeStr3 = rdline;
+
+      if (L == 0) {
+        time_t TIME1 = timeStringToSeconds(timeStr1);  // Login time
+
+        time_t TIMEst = timeStringToSeconds(timeStr3);  // Break start time
+
+        time_t timeDifference = (TIMEst - TIME1);
+        SDdiffSecond = timeDifference;
+        Serial.println("SDdiffSecond1");
+        Serial.print(SDdiffSecond);
+      }
+
+      if (L >= 1) {
+        time_t TIME3 = timeStringToSeconds(timeStr2);  // Efficiency time
+
+        time_t TIMEst = timeStringToSeconds(timeStr3);  // Break start time
+
+        time_t timeDifference = (TIMEst - TIME3);
+        SDdiffSecond = timeDifference;
+        Serial.println("SDdiffSecond2");
+        Serial.println(SDdiffSecond);
+      }
+
+      readFile(SD, "/63.txt");
+      sessionId_O = rdline;
+
+      readFile(SD, "/64.txt");
+      sessionId_S = rdline;
+
+      readFile(SD, "/65.txt");
+      sessionId_M = rdline;
+
+      readFile(SD, "/40.txt"); /*SD Read*/
+      buttonPressCount = rdline.toInt();
+
+      readFile(SD, "/41.txt"); /*SD Read*/
+      pieceCount = rdline.toInt();
+
+      readFile(SD, "/27.txt"); /*SD Read*/
+      autoCountMode = rdline.toInt() != 0;
+
+      if (autoCountMode == 1) {
+        String autoM = "A";
+        send_text6(autoM);
+        send_text6(autoM);
+      }
+
+      if (autoCountMode == 0) {
+        String manualM = "M";
+        send_text6(manualM);
+        send_text6(manualM);
+      }
+
+      readFile(SD, "/42.txt"); /*SD Read*/
+      trainingCountDown = rdline.toInt();
+
+      // readFile(SD, "/43.txt"); /*SD Read*/
+      // accumulatedArea = rdline.toDouble();
+
+      readFile(SD, "/44.txt"); /*SD Read*/
+      trainedArea = rdline.toFloat();
+
+      readFile(SD, "/69.txt");
+      idleVpp = rdline.toFloat();
+
+      readFile(SD, "/70.txt");
+      Hour_Z = rdline.toInt();
+
+      readFile(SD, "/73.txt");
+      SuMe_memo = rdline.toInt();
+
+
+      Serial.println("/**** Supervisor and mechanic ****/");
+
+      if (SuMe_memo == 1) {
+        supervisorCheck = 1;
+        pageShift3();  // Page 16 (Issue in progress
+        pageShift3();  // Page 16 (Issue in progress
+
+      } else if (SuMe_memo == 2) {
+        mechanicCheck = 1;
+        pageShift4();  // Page 17 (Repair in progress)
+        pageShift4();  // Page 17 (Repair in progress)
+      }
+
+    }
+
+
+    /**** Network settingup page when device power interrupt happend ****/
+    else if ((pageNo == "0") && (attendanceOp == 1) && (errorS == 0) && (BreakCheck == 0) && (opChangeM == 0)) {
+      Serial.println("/**** Device power interrupt start ****/");
+
+      MQTT_Reconnect();
+      EXIT_Table = 1;
+      NO_Power = 1;
+
+      readFile(SD, "/1.txt"); /*SD Read*/
+      smv = rdline.toInt();
+      String smv_SD = String(smv);
+      send_text9(smv_SD);
+      send_text9(smv_SD);
+
+      readFile(SD, "/2.txt"); /*SD Read*/
+      spi = rdline.toInt();
+      String spi_SD = String(spi);
+      send_text10(spi_SD);
+      send_text10(spi_SD);
+
+      readFile(SD, "/3.txt"); /*SD Read*/
+      workingHr = rdline.toInt();
+
+      readFile(SD, "/51.txt"); /*SD Read*/
+      DAILY = rdline.toInt();
+
+      readFile(SD, "/4.txt"); /*SD Read*/
+      E_RGB_LOW = rdline.toInt();
+
+      readFile(SD, "/5.txt"); /*SD Read*/
+      E_RGB_HIGH = rdline.toInt();
+
+      readFile(SD, "/6.txt"); /*SD Read*/
+      target = rdline.toInt();
+      Tar = target;
+      send_text3(rdline);
+      send_text3(rdline);
+
+      readFile(SD, "/7.txt"); /*SD Read*/
+      machineId = rdline;
+      send_text20(machineId);
+
+      readFile(SD, "/8.txt"); /*SD Read*/
+      machineType = rdline;
+      send_text7(machineType);
+      send_text7(machineType);
+
+      readFile(SD, "/9.txt"); /*SD Read*/
+      ownership = rdline;
+      send_text8(ownership);
+      send_text8(ownership);
+
+      readFile(SD, "/10.txt"); /*SD Read*/
+      obbOperationId = rdline;
+
+      readFile(SD, "/11.txt"); /*SD Read*/
+      style = rdline;
+      send_text14(style);
+      send_text14(style);
+
+      readFile(SD, "/12.txt"); /*SD Read*/
+      supervisorName = rdline;
+      send_text17(supervisorName);
+      send_text17(supervisorName);
+
+      readFile(SD, "/13.txt"); /*SD Read*/
+      supervisorRFID = rdline;
+
+      readFile(SD, "/14.txt"); /*SD Read*/
+      mechanicName = rdline;
+      send_text16(mechanicName);
+      send_text16(mechanicName);
+
+      readFile(SD, "/15.txt"); /*SD Read*/
+      mechanicRFID = rdline;
+
+      readFile(SD, "/16.txt"); /*SD Read*/
+      MeEmployeeId = rdline;
+
+      readFile(SD, "/17.txt"); /*SD Read*/
+      SuEmployeeId = rdline;
+
+      readFile(SD, "/18.txt"); /*SD Read*/
+      qualityInsName = rdline;
+      send_text18(qualityInsName);
+      send_text18(qualityInsName);
+
+      readFile(SD, "/19.txt"); /*SD Read*/
+      operationName = rdline;
+      send_text15(operationName);
+
+      readFile(SD, "/20.txt"); /*SD Read*/
+      productionLine = rdline;
+      send_text13(productionLine);
+
+      readFile(SD, "/24.txt"); /*SD Read*/
+      OperatorID = rdline;
+      send_text1(OperatorID);
+      send_text1(OperatorID);
+
+      send_text19(deviceId);
+      send_text19(deviceId);
+
+      readFile(SD, "/54.txt"); /*SD Read*/
+      t = rdline.toInt();
+
+      readFile(SD, "/55.txt"); /*SD Read*/
+      AEM = rdline.toInt();
+
+      readFile(SD, "/52.txt");
+      G = rdline.toInt();
+
+      readFile(SD, "/53.txt");
+      LG = rdline.toInt();
+
+      readFile(SD, "/68.txt");
+      RG = rdline.toInt();
+
+      readFile(SD, "/49.txt");
+      N = rdline.toInt();
+      send_text4(rdline);
+      send_text4(rdline);
+      if (N == 0) {
+        String Nstr = "0";
+        send_text4(Nstr);
+        send_text4(Nstr);
+      }
+
+      readFile(SD, "/45.txt");
+      CON = rdline.toInt();
+
+      readFile(SD, "/46.txt");
+      J = rdline.toInt();
+
+      readFile(SD, "/47.txt");
+      L = rdline.toInt();
+
+      int Lvalue = L + 1;
+      String Ldata = String(Lvalue);
+      send_text23(Ldata);  //L+1
+      send_text23(Ldata);
+
+      readFile(SD, "/48.txt");
+      proTar = rdline.toInt();
+
+      //readFile(SD, "/50.txt");
+      //HrTar = rdline.toInt();
+      //send_text3(rdline);
+      //send_text3(rdline);
+
+      readFile(SD, "/60.txt");
+      EFF_RGB_MEM = rdline.toInt();
+
+      if (EFF_RGB_MEM == 1) {
+        readFile(SD, "/54.txt");
+        t = rdline.toInt();
+        meter2();
+      }
+
+      readFile(SD, "/34.txt");
+      breakCount = rdline.toInt();
+      if (ReadDone == 0) {
+        breakCount = 0;
+      }
+
+      readFile(SD, "/30.txt");
+      mCallCount = rdline.toInt();
+      if (ReadDone == 0) {
+        mCallCount = 0;
+      }
+
+      readFile(SD, "/28.txt");
+      mR = rdline.toInt();
+      if (ReadDone == 0) {
+        mR = 0;
+      }
+
+      readFile(SD, "/32.txt");
+      sCallCount = rdline.toInt();
+      if (ReadDone == 0) {
+        sCallCount = 0;
+      }
+
+      readFile(SD, "/25.txt");
+      sR = rdline.toInt();
+      if (ReadDone == 0) {
+        sR = 0;
+      }
+
+      readFile(SD, "/26.txt");
+      S_mem = rdline.toInt();
+      if (ReadDone == 0) {
+        S_mem = 0;
+      }
+
+      readFile(SD, "/29.txt");
+      M_mem = rdline.toInt();
+      if (ReadDone == 0) {
+        M_mem = 0;
+      }
+
+      if (sR == 0) {
+        uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x00 };
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
+      }
+
+      if (sR == 1) {
+        uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x17, 0x00, 0x00, 0x01 };  // Supervisor icon change to green color
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
+      }
+
+      if (mR == 0) {
+        uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x00 };
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
+      }
+
+      if (mR == 1) {
+        uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x20, 0x00, 0x00, 0x01 };
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
+      }
+
+      readFile(SD, "/62.txt");
+      tt = rdline.toInt();
+
+      readFile(SD, "/61.txt");
+      AEMM = rdline.toInt();
+
+      readFile(SD, "/39.txt"); /*SD Read*/
+      GOR_M = rdline.toInt();
+      if (ReadDone == 0) {
+        GOR_M = 0;
+      }
+
+      if (GOR_M == 1) {
+
+        leds[0] = CRGB(0, 255, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(0, 255, 0);
+        FastLED.show();
+      }
+      if (GOR_M == 2) {
+
+        leds[0] = CRGB(255, 165, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 165, 0);
+        FastLED.show();
+      }
+      if (GOR_M == 3) {
+
+        leds[0] = CRGB(255, 0, 0);
+        FastLED.show();
+
+        leds[1] = CRGB(255, 0, 0);
+        FastLED.show();
       }
 
       readFile(SD, "/31.txt"); /*SD Read*/
@@ -2768,13 +3491,13 @@ void displayDWIN() {
       }
 
       readFile(SD, "/63.txt");
-      sessionId_O = rdline.toInt();
+      sessionId_O = rdline;
 
       readFile(SD, "/64.txt");
-      sessionId_S = rdline.toInt();
+      sessionId_S = rdline;
 
       readFile(SD, "/65.txt");
-      sessionId_M = rdline.toInt();
+      sessionId_M = rdline;
 
       readFile(SD, "/40.txt"); /*SD Read*/
       buttonPressCount = rdline.toInt();
@@ -2787,14 +3510,14 @@ void displayDWIN() {
 
       if (autoCountMode == 1) {
         String autoM = "A";
-        send_text(6,autoM);
-        send_text(6,autoM);
+        send_text6(autoM);
+        send_text6(autoM);
       }
 
       if (autoCountMode == 0) {
         String manualM = "ML";
-        send_text(6,manualM);
-        send_text(6,manualM);
+        send_text6(manualM);
+        send_text6(manualM);
       }
 
 
@@ -2815,8 +3538,8 @@ void displayDWIN() {
 
       Serial.println("/**** Device power interrupt end ****/");
 
-      pageShift(1);
-      pageShift(1);
+      pageShift1();
+      pageShift1();
 
     }
 
@@ -2836,8 +3559,16 @@ void displayDWIN() {
         FirstPG = 1;
 
         uint8_t data1[] = { 0x5A, 0xA5, 0x05, 0x82, 0x00, 0xA0, 0x00, 0x0A };  // Buzzer on
-        sendCommand(data1);
-        sendCommand(data1);
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data1[i]);
+        }
+
+        delay(200);
+
+        uint8_t data2[] = { 0x5A, 0xA5, 0x05, 0x82, 0x00, 0xA0, 0x00, 0x0A };
+        for (size_t i = 0; i < 8; i++) {
+          Serial2.write(data2[i]);
+        }
 
         Serial.println("/**** Download from the database end ****/");
 
@@ -2855,33 +3586,33 @@ void displayDWIN() {
         Serial.print("machineId = ");
         Serial.println(machineId);
         writeFile(SD, "/7.txt", machineId.c_str()); /*SD Save*/
-        send_text(20,machineId);
+        send_text20(machineId);
 
         Serial.print("machineType = ");
         Serial.println(machineType);
         writeFile(SD, "/8.txt", machineType.c_str()); /*SD Save*/
-        send_text(7,machineType);
-        send_text(7,machineType);
+        send_text7(machineType);
+        send_text7(machineType);
 
         Serial.print("ownership = ");
         Serial.println(ownership);
         writeFile(SD, "/9.txt", ownership.c_str()); /*SD Save*/
-        send_text(8,ownership);
-        send_text(8,ownership);
+        send_text8(ownership);
+        send_text8(ownership);
 
         Serial.print("smv = ");
         Serial.println(smv);
         String smv_SD = String(smv);
         writeFile(SD, "/1.txt", smv_SD.c_str()); /*SD Save*/
-        send_text(9,smv_SD);
-        send_text(9,smv_SD);
+        send_text9(smv_SD);
+        send_text9(smv_SD);
 
         Serial.print("spi = ");
         Serial.println(spi);
         String spi_SD = String(spi);
         writeFile(SD, "/2.txt", spi_SD.c_str()); /*SD Save*/
-        send_text(10,spi_SD);
-        send_text(10,spi_SD);
+        send_text10(spi_SD);
+        send_text10(spi_SD);
 
         Serial.print("target = ");
         Serial.println(target);
@@ -2890,8 +3621,8 @@ void displayDWIN() {
         String target_SD = String(target);
         writeFile(SD, "/6.txt", target_SD.c_str());  /*SD Save*/
         writeFile(SD, "/50.txt", target_SD.c_str()); /*SD Save*/
-        send_text(3,target_SD);
-        send_text(3,target_SD);
+        send_text3(target_SD);
+        send_text3(target_SD);
 
         Serial.print("workingHours = ");
         Serial.println(workingHours);
@@ -2919,13 +3650,13 @@ void displayDWIN() {
         Serial.print("style = ");
         Serial.println(style);
         writeFile(SD, "/11.txt", style.c_str()); /*SD Save*/
-        send_text(14,style);
-        send_text(14,style);
+        send_text14(style);
+        send_text14(style);
 
         Serial.print("operationName = ");
         Serial.println(operationName);
         writeFile(SD, "/19.txt", operationName.c_str()); /*SD Save*/
-        send_text(15,operationName);
+        send_text15(operationName);
 
         Serial.print("SuEmployeeId = ");
         Serial.println(SuEmployeeId);
@@ -2938,14 +3669,14 @@ void displayDWIN() {
         Serial.print("supervisorName = ");
         Serial.println(supervisorName);
         writeFile(SD, "/12.txt", supervisorName.c_str()); /*SD Save*/
-        send_text(17,supervisorName);
-        send_text(17,supervisorName);
+        send_text17(supervisorName);
+        send_text17(supervisorName);
 
         Serial.print("mechanicName = ");
         Serial.println(mechanicName);
         writeFile(SD, "/14.txt", mechanicName.c_str()); /*SD Save*/
-        send_text(16,mechanicName);
-        send_text(16,mechanicName);
+        send_text16(mechanicName);
+        send_text16(mechanicName);
 
         Serial.print("MeEmployeeId = ");
         Serial.println(MeEmployeeId);
@@ -2958,16 +3689,16 @@ void displayDWIN() {
         Serial.print("qualityInsName = ");
         Serial.println(qualityInsName);
         writeFile(SD, "/18.txt", qualityInsName.c_str()); /*SD Save*/
-        send_text(18,qualityInsName);
-        send_text(18,qualityInsName);
+        send_text18(qualityInsName);
+        send_text18(qualityInsName);
 
         Serial.print("productionLine = ");
         Serial.println(productionLine);
         writeFile(SD, "/20.txt", productionLine.c_str()); /*SD Save*/
-        send_text(13,productionLine);
+        send_text13(productionLine);
 
-        pageShift(7);
-        pageShift(7);
+        pageShift7();
+        pageShift7();
 
         dataReceived_initial_data = false;
       }
@@ -2976,12 +3707,12 @@ void displayDWIN() {
 
   /**** WIFI reset function ****/
   else if ((buttonNo == "1320")) {
-    pageShift(5);
-    pageShift(5);
+    pageShift5();
+    pageShift5();
     delay(1500);
     wm.resetSettings();
-    pageShift(2);
-    pageShift(2);
+    pageShift2();
+    pageShift2();
     ESP.restart();
   }
 
@@ -2998,7 +3729,7 @@ void readCard(int blockAddr) {
     Serial.print("Read from the blockAddr of the card : ");
     Serial.println(blockAddr, DEC);
     if (rfid.read(blockAddr, str) == MI_OK) {
-      pageShift(5);  // Page 19 (Loading Page)
+      pageShift5();  // Page 19 (Loading Page)
       delay(1000);
       Serial.print("The data is : ");
       dataa = ((char *)str);
@@ -3019,40 +3750,415 @@ void reconnectWiFi() {
   // Attempt to reconnect
   unsigned long startTime = millis();
   while (WiFi.status() != WL_CONNECTED && millis()) {  // Wait for 10 seconds
-    delay(500);
-    Serial.print(".");
+
+    leds[0] = CRGB(255, 0, 0);
+    FastLED.show();
+    leds[1] = CRGB(255, 0, 0);
+    FastLED.show();
+    delay(300);
+    leds[0] = CRGB(0, 0, 0);
+    FastLED.show();
+    leds[1] = CRGB(0, 0, 0);
+    FastLED.show();
+    delay(300);
+    leds[0] = CRGB(255, 0, 0);
+    FastLED.show();
+    leds[1] = CRGB(255, 0, 0);
+    FastLED.show();
+    delay(300);
+    leds[0] = CRGB(0, 0, 0);
+    FastLED.show();
+    leds[1] = CRGB(0, 0, 0);
+    FastLED.show();
+    delay(300);
   }
 }
 
 
-void send_text(uint8_t txtNo, String text) {  
+/**** Main Page Dwin Functions ****/
+void send_text1(String text) {  // Operator ID
   text.toCharArray(output, 50);
-  uint8_t b3[]={0x12,0x15,0x06,0x06,0,0x09,0x06,0x0A,0x06,0x06,0,0,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x09,0,0x06,0xFF};
-  uint8_t b5[]={0x10,0x11,0x12,0x16,0,0x14,0x80,0x81,0x87,0x85,0,0,0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x42,0,0x15,0x83};
   Serial2.write(0x5A);
   Serial2.write(0xA5);
-  Serial2.write(b3[txtNo-1]);
+  Serial2.write(0x12);
   Serial2.write(0x82);
-  Serial2.write(b5[txtNo-1]);  // VP address (8300)
+  Serial2.write(0x10);  // VP address (1000)
   Serial2.write(0x00);
   Serial2.write(output);
   Serial2.write(0x00);
 }
 
-void sendCommand(uint8_t data[]){
-  for (size_t i = 0; i < 8; i++) {
-            Serial2.write(data[i]);
-          }
+void send_text2(String text) {  // Live time
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x15);
+  Serial2.write(0x82);
+  Serial2.write(0x11);  // VP address (1100)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
 }
 
-void pageShift(uint8_t pgNo)  
+void send_text3(String text) {  //Target production
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x06);
+  Serial2.write(0x82);
+  Serial2.write(0x12);  // VP address (1200)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+void send_text4(String text) {  //Actual production
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x06);
+  Serial2.write(0x82);
+  Serial2.write(0x16);  // VP address (1600)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+
+
+void send_text6(String text) {  // Auto Manual selection
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x09);
+  Serial2.write(0x82);
+  Serial2.write(0x14);  // VP address (1400)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+/**** Table One ****/
+void send_text13(String text) {  // Operation line
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x70);  // VP address (7000)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+void send_text14(String text) {  // Style Name
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x71);  // VP address (7100)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+void send_text15(String text) {  // Operation name
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x72);  // VP address (7200)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+void send_text16(String text) {  // Mechanic ID
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x73);  // VP address (7300)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+void send_text17(String text) {  //Supervisor ID
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x74);  // VP address (7400)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+void send_text18(String text) {  // QI name
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x75);  // VP address (7500)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+void send_text19(String text) {  //ELIoT ID
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x76);  // VP address (7600)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+void send_text20(String text) {  //Sewing machine ID
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0F);
+  Serial2.write(0x82);
+  Serial2.write(0x77);  // VP address (7700)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+
+/**** Table Two ****/
+void send_text7(String text) {  //Sewing machine model
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x06);
+  Serial2.write(0x82);
+  Serial2.write(0x80);  // VP address (8000)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+void send_text8(String text) {  //Sewing machine ownership
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x0A);
+  Serial2.write(0x82);
+  Serial2.write(0x81);  // VP address (8100)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+void send_text9(String text) {  // Opertation SMV
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x06);
+  Serial2.write(0x82);
+  Serial2.write(0x87);  // VP address (8700)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+void send_text10(String text) {  // Operation SPI
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x06);
+  Serial2.write(0x82);
+  Serial2.write(0x85);  // VP address (8500)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+
+/**** Other Text ****/
+void send_text21(String text) {  // Operator break time
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x09);
+  Serial2.write(0x82);
+  Serial2.write(0x42);  // VP address (4200)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+void send_text23(String text) {  // Production time slots
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0x06);
+  Serial2.write(0x82);
+  Serial2.write(0x15);  // VP address (1500)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+void send_text24(String text) {  // MAC address
+  text.toCharArray(output, 50);
+  Serial2.write(0x5A);
+  Serial2.write(0xA5);
+  Serial2.write(0xFF);
+  Serial2.write(0x82);
+  Serial2.write(0x83);  // VP address (8300)
+  Serial2.write(0x00);
+  Serial2.write(output);
+  Serial2.write(0x00);
+}
+
+/**** Page Changing ****/
+void pageShift1()  // Page 02 (Main page)
 {
-  uint8_t pages[] = { 0x02, 0x00, 0x0D, 0x0E, 0x10, 0x11, 0x01, 0xFF, 0xFF, 0x05, 0x07, 0x09, 0x03, 0x0A, 0xFF, 0x19, 0x0F ,0x15, 0x08, 0x06, 0x1A};
-  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00};
-  for (size_t i = 0; i < 9; i++) {
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x02 };
+  for (size_t i = 0; i < 10; i++) {
     Serial2.write(data1[i]);
   }
-    Serial2.write(pages[pgNo-1]);
+}
+
+void pageShift2()  // Page 00 (Network setting up page)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x00 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift3()  // Page 13 (Issue in progress)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x0D };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift4()  // Page 14 (Repair in progress)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x0E };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift5()  // Page 16 (Loading Page)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x10 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift6()  // Page 17 (Tryagain Page)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x11 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift7()  // Page 01 (Operaor login page)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x01 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift10()  // Page 05 (Mechanic Login)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x05 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift11()  // Page 07 (Supervisor Login)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x07 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift12()  // Page 09 (Operator Logout)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x09 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift13()  // Page 03 (Help page)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x03 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift14()  // Page 10 (Auto or manual mode confirm by supervisor)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x0A };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift16()  // Page 25 (Page after the shustdown function`s yes button)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x19 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift17()  // Page 15 (Operator break time page)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x0F };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift18()  // Page 21 (Page before Network setting up page)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x15 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift19()  // Page 08 (Supervisor Logout)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x08 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift20()  // Page 06 (Mechanic Logout)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x06 };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
+}
+
+void pageShift21()  // Page 26 (Training mode started)
+{
+  uint8_t data1[] = { 0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x1A };
+  for (size_t i = 0; i < 10; i++) {
+    Serial2.write(data1[i]);
+  }
 }
 
 /**** Read Page ****/
@@ -3198,15 +4304,37 @@ void meter2() {  // DWIN efficency meter icon function
   Serial2.write(Meter2);  // Changing value 100%
 
   if (E_RGB_LOW >= t) {
-    setLEDs(0,255,0,0);
-  }else if (E_RGB_HIGH > t && E_RGB_LOW < t) {
-    setLEDs(0,255,165,0);
-  }else if (E_RGB_HIGH <= t) {
-   setLEDs(0,0,255,0);
-  }else if (trainingCountDown!=0) 
-   setLEDs(0,0,0,255);
-  
-  
+
+    leds[2] = CRGB(255, 0, 0);
+    FastLED.show();
+
+    leds[3] = CRGB(255, 0, 0);
+    FastLED.show();
+  }
+  if (E_RGB_HIGH > t && E_RGB_LOW < t) {
+
+    leds[2] = CRGB(255, 165, 0);
+    FastLED.show();
+
+    leds[3] = CRGB(255, 165, 0);
+    FastLED.show();
+  }
+  if (E_RGB_HIGH <= t) {
+
+    leds[2] = CRGB(0, 255, 0);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 255, 0);
+    FastLED.show();
+  }
+if (trainingCountDown!=0) {
+
+    leds[2] = CRGB(0, 0, 255);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 0, 255);
+    FastLED.show();
+  }
 }
 
 
@@ -3229,7 +4357,7 @@ void ctThread() {
 
     if (buttonPressCount == 1) {
       digitalWrite(ledPin, HIGH);
-      
+
       delay(100);
       setIdleVpp();
       accumulatedArea = 0;
@@ -3239,10 +4367,10 @@ void ctThread() {
 
     if (awaitButtonPress) {
       if (trainedArea != 0.0) {
-        toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 2);
+        toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 3);
         if (accumulatedArea < toleranceArea) {
           pieceCount++;  //// piece count approves only after pretrained area is reached
-          
+
           String pieceC = String(pieceCount);
           writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
           effi_cal();
@@ -3256,29 +4384,37 @@ void ctThread() {
 
     if (trainingCountDown != 0 && buttonPressCount > 1) {
       digitalWrite(ledPin, HIGH);
-      if(accumulatedArea>0.0){
-      pieceCount++;  /// Take trainning piece as 1st count
-      String pieceC = String(pieceCount);
-      writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
-      effi_cal();
+      if (accumulatedArea > 0.0) {
+        pieceCount++;  /// Take trainning piece as 1st count
+        String pieceC = String(pieceCount);
+        writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
+        effi_cal();
 
-      trainingCountDown--;
-      String trainCD = String(trainingCountDown);
-      writeFile(SD, "/42.txt", trainCD.c_str()); /*SD Save*/
-      savedLastEdge=lastEdgeMillis;}
+        trainingCountDown--;
+        String trainCD = String(trainingCountDown);
+        writeFile(SD, "/42.txt", trainCD.c_str()); /*SD Save*/
+				trainedSMV = lastEdgeMillis - savedLastEdge;     
+        savedLastEdge = lastEdgeMillis;
+      }
       printStats();
       if (trainingCountDown == 0) {
-        setLEDs(0,0,0,0);
+        leds[2] = CRGB(0, 0, 0);
+        FastLED.show();
+
+        leds[3] = CRGB(0, 0, 0);
+        FastLED.show();
+
         trainedArea = accumulatedArea / trainingNum;
-        smv=lastEdgeMillis- savedLastEdge;
+        
         String trainnedA = String(trainedArea);
         writeFile(SD, "/44.txt", trainnedA.c_str()); /*SD Save*/
+         /// trainedSMV save to sd here              //// sd Save !!!!!!!!!!!!!!!
 
         accumulatedArea = 0;  /// reset at last
-        Serial.print("\ntrainned Area-");
+        Serial.println("\nTrainned Area,Trained SMV");
         Serial.println(trainedArea);
-        Serial.println(smv);
-        pageShift(1);
+        Serial.println(trainedSMV);
+        pageShift1();
       }
     }
   }
@@ -3286,61 +4422,79 @@ void ctThread() {
   pushToBuffer(getVpp());
 
   // Print peak-to-peak voltage
-  Serial.print(avrVpp.get());
-  Serial.print(" ");
-  Serial.print(upperTrigger+idleVpp);
-  Serial.print(" ");
-  Serial.print(lowerTrigger+idleVpp);
-  Serial.print(" ");
-  Serial.println(idleVpp);
+  // Serial.print(avrVpp.get());
+  // Serial.print(" ");
+  // Serial.print(upperTrigger+idleVpp);
+  // Serial.print(" ");
+  // Serial.print(lowerTrigger+idleVpp);
+  // Serial.print(" ");
+  // Serial.println(idleVpp);
 
   //// check rising edge or falling edge
   int currentEdge = getEdge();
 
   if (currentEdge == -1) {  /// triggers on a falling edge and caluculate the needledown time
     accumulateAreaFlag = false;
-    lastEdgeMillis=millis();
+    lastEdgeMillis = millis();
 
     if (awaitStop) {
       awaitStop = false;
-      toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 2);
-      
+      toleranceArea = trainedArea + (trainedArea * autoModeTolerance * 4);
+
       if (accumulatedArea < toleranceArea) {
-        waitASec=true;
-      }
-  
+        waitASec = true;
+      }else Serial.println("Area exceeded");
+
       Serial.println(accumulatedArea);
       accumulatedArea = 0;
       Serial.println(pieceCount);
-      
     }
   } else if (currentEdge == 1) {
     accumulateAreaFlag = true;
   }
 
   //accumulate area
-  if (accumulateAreaFlag) {  //// awaitstop is 1 means a previous operation may not over yet.
-    float cVpp = avrVpp.get() - idleVpp;
-    if (cVpp < 0) cVpp = 0;
-    accumulatedArea += cVpp;
-    digitalWrite(ledPin, HIGH);
-    areaReseterCounter=0;
-    waitASec=0;
+  if (accumulateAreaFlag) {
+    unsigned long currentTime = millis();
+    unsigned long elapsedTime = currentTime - lastAccumulationTime;
+
+    if (elapsedTime >= ctThreadInterval) {
+      float currentCVpp = avrVpp.get() - idleVpp;
+      if (currentCVpp < 0) currentCVpp = 0;
+
+      // Average the current and previous cVpp values
+      float averageCVpp = (previousCVpp + currentCVpp) / 2.0;
+
+      // Adjust accumulated area based on elapsed time and the average cVpp
+      accumulatedArea += (averageCVpp * elapsedTime) / ctThreadInterval;
+
+      digitalWrite(ledPin, HIGH);
+      areaReseterCounter = 0;
+      waitASec = 0;
+
+      // Update previousCVpp and lastAccumulationTime
+      previousCVpp = currentCVpp;
+      lastAccumulationTime = currentTime;
+    }
   } else {
     digitalWrite(ledPin, LOW);  /// operation traking is indicated by led
-    int ctCyclesPerSec=1000/ctThreadInterval;
+    int ctCyclesPerSec = 1000 / ctThreadInterval;
     areaReseterCounter++;
     toleranceArea = trainedArea - (trainedArea * 0.80);  /// inverse of autoModeTolarence
-    if(trainingCountDown==0&&areaReseterCounter==(ctCyclesPerSec*5) && accumulatedArea < toleranceArea) {
-      if(!newPieceFlag){
-        newPieceFlag=1;
+    if (trainingCountDown == 0 && areaReseterCounter == (ctCyclesPerSec * 15) && accumulatedArea < toleranceArea) {
+      if (!newPieceFlag) {
+        newPieceFlag = 1;
         Serial.print("Reset Area :");
         Serial.println(accumulatedArea);
-        accumulatedArea=0;
+        accumulatedArea = 0;
       }
-    }else if(waitASec&&trainingCountDown==0&&areaReseterCounter==ctCyclesPerSec){
-      waitASec=0;
+    } else if (waitASec && trainingCountDown == 0 && areaReseterCounter == ctCyclesPerSec) {
+      waitASec = 0;
       pieceCount++;
+      autoSMV = millis() - lastPieceMillis;
+	    if(autoSMV<150000) avrAutoSMV.push(autoSMV);
+      lastPieceMillis = millis();
+      Serial.println(autoSMV);
       String pieceC = String(pieceCount);
       writeFile(SD, "/41.txt", pieceC.c_str()); /*SD Save*/
       //printStats();
@@ -3352,7 +4506,7 @@ void ctThread() {
   if (trainingCountDown == 0 && accumulatedArea > toleranceArea) {
     if (autoCountMode) {
       awaitStop = true;
-      newPieceFlag=0;
+      newPieceFlag = 0;
       // String accumulatedA = String(accumulatedArea);
       // writeFile(SD, "/43.txt", accumulatedA.c_str()); /*SD Save*/
 
@@ -3398,22 +4552,22 @@ int getEdge() {
 }
 
 float getVpp() {
-  // Read ADC values into buffer
-  for (int i = 0; i < vppBuffSize; i++) {
-    adcValues[i] = analogRead(adcPin);
-    delay(2);  // Adjust delay as needed based on sampling frequency
-  }
+  // Initialize the first ADC value
+  int maxVal = analogRead(adcPin);
+  int minVal = maxVal;
 
-  // Find maximum and minimum values in buffer
-  int maxVal = adcValues[0];
-  int minVal = adcValues[0];
+  // Read ADC values, finding min and max on the fly
   for (int i = 1; i < vppBuffSize; i++) {
-    if (adcValues[i] > maxVal) {
-      maxVal = adcValues[i];
+    int adcValue = analogRead(adcPin);
+
+    if (adcValue > maxVal) {
+      maxVal = adcValue;
     }
-    if (adcValues[i] < minVal) {
-      minVal = adcValues[i];
+    if (adcValue < minVal) {
+      minVal = adcValue;
     }
+
+    delay(2);  // Adjust delay as needed based on sampling frequency
   }
 
   // Calculate peak-to-peak voltage
@@ -3455,10 +4609,15 @@ void pushToBuffer(float value) {
 void setTrainingMode(int tcd) {
   hmiButtonFlag = true;
   buttonPressCount = 0;
+	trainedSMV=0;        ////////////////////// save to card
   String buttonPress = String(buttonPressCount);
   writeFile(SD, "/40.txt", buttonPress.c_str()); /*SD Save*/
   trainingCountDown = tcd;
-  setLEDs(0,0,0,255);
+    leds[2] = CRGB(0, 0, 255);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 0, 255);
+    FastLED.show();
   trainedArea = 0;
   String trainnedA = String(trainedArea);
   writeFile(SD, "/44.txt", trainnedA.c_str()); /*SD Save*/
@@ -3483,7 +4642,7 @@ void onTheHour() {
 
   if (J == 0) {
     String HRstr = "1";
-    send_text(23,HRstr);
+    send_text23(HRstr);
     CON = 0;
     String CONcount = String(CON);
     writeFile(SD, "/45.txt", CONcount.c_str()); /*SD Save*/
@@ -3500,10 +4659,9 @@ void onTheHour() {
 
   currentMinute = ptm->tm_min;  // Get the current minute
 
-
   if (currentMinute % 5 == 0 && Min_X == 1) {
 
-
+    smvAverageCal(avrAutoSMV.get());
     char formattedTime[20];
     strftime(formattedTime, sizeof(formattedTime), "%Y%m%d%H%M%S", ptm);
     String dateTimee = String(formattedTime);
@@ -3524,6 +4682,7 @@ void onTheHour() {
     MQTT_Reconnect();
     set_ProductionData(OperatorID, deviceId, obbOperationId, RG, dateTime);
 
+
     Min_X = 0;
     Min_Y = 1;
 
@@ -3543,7 +4702,8 @@ void onTheHour() {
     Hour_Y = 1;
     Hour_Z = 0;
     String HourZ = String(Hour_Z);
-    writeFile(SD, "/70-2.txt", HourZ.c_str()); /*SD Save*/
+    writeFile(SD, "/70.txt", HourZ.c_str()); /*SD Save*/
+    send_SMV(obbOperationId, OperatorID, smv_CAL, dateTime1);
     Efficiency();
   }
 
@@ -3553,16 +4713,18 @@ void onTheHour() {
   }
 
   if ((currentMinute > 01) && (currentMinute < 45) && (Hour_Z == 1)) {
+    Done45 = 0;
     Hour_Z = 0;
     String HourZ = String(Hour_Z);
-    writeFile(SD, "/70-3.txt", HourZ.c_str()); /*SD Save*/
+    writeFile(SD, "/70.txt", HourZ.c_str()); /*SD Save*/
     Efficiency();
   }
 
-  if (currentMinute == 45 && currentMinute == 55) {
+  if ((currentMinute >= 45) && (Done45 == 0)) {
+    Done45 = 1;
     Hour_Z = 1;
     String HourZ = String(Hour_Z);
-    writeFile(SD, "/70-1.txt", HourZ.c_str()); /*SD Save*/
+    writeFile(SD, "/70.txt", HourZ.c_str()); /*SD Save*/
   }
 }
 
@@ -3590,8 +4752,8 @@ void Efficiency() {
 
     int numHR = L + 1;
     String numHRstr = String(numHR);
-    send_text(23,numHRstr);
-    send_text(23,numHRstr);
+    send_text23(numHRstr);
+    send_text23(numHRstr);
     Serial.println("SLOT EKATA AVA");
   }
   Serial.print("Working+1 eka:");
@@ -3604,14 +4766,37 @@ void Efficiency() {
     meter1();
 
     if (E_RGB_LOW >= t) {
-      setLEDs(0,255,0,0);
-    } else if (E_RGB_HIGH > t && E_RGB_LOW < t) {
-      setLEDs(0,255,165,0);
-    }else if (E_RGB_HIGH <= t) {
-      setLEDs(0,0,255,0);
-    }else if (trainingCountDown!=0) {
-      setLEDs(0,0,0,255);
+
+      leds[2] = CRGB(255, 0, 0);
+      FastLED.show();
+
+      leds[3] = CRGB(255, 0, 0);
+      FastLED.show();
     }
+    if (E_RGB_HIGH > t && E_RGB_LOW < t) {
+
+      leds[2] = CRGB(255, 165, 0);
+      FastLED.show();
+
+      leds[3] = CRGB(255, 165, 0);
+      FastLED.show();
+    }
+    if (E_RGB_HIGH <= t) {
+
+      leds[2] = CRGB(0, 255, 0);
+      FastLED.show();
+
+      leds[3] = CRGB(0, 255, 0);
+      FastLED.show();
+    }
+if (trainingCountDown!=0) {
+
+    leds[2] = CRGB(0, 0, 255);
+    FastLED.show();
+
+    leds[3] = CRGB(0, 0, 255);
+    FastLED.show();
+  }
   }
 
   if (proTar > workingHr) {
@@ -3622,22 +4807,19 @@ void Efficiency() {
 
   int num2 = N;
   String str2 = String(num2);
-  send_text(4,str2);
+  send_text4(str2);
   writeFile(SD, "/49.txt", str2.c_str()); /*SD Save*/
 
-  Serial.print("Tar eka: ");
   Serial.println(Tar);
 
   HrTar = Tar + SUM;
   String ss = String(HrTar);
-  send_text(3,ss);
-  send_text(3,ss);
+  //send_text3(ss);
+  //send_text3(ss);
   writeFile(SD, "/50.txt", ss.c_str()); /*SD Save*/
 
-  Serial.print("Actula eka: ");
   Serial.println(HrTar);
 
-  Serial.print("N eka: ");
   Serial.println(N);
 
   if (HrTar > 0) {
@@ -3659,19 +4841,19 @@ void Efficiency() {
     R = 0;
     int num1 = R;
     String str1 = String(num1);
-    send_text(23,str1);
-    send_text(23,str1);
+    send_text23(str1);
+    send_text23(str1);
 
     int num2 = 0;
     String str2 = String(num2);
-    send_text(4,str2);
-    send_text(4,str2);
+    send_text4(str2);
+    send_text4(str2);
     writeFile(SD, "/49.txt", str2.c_str()); /*SD Save*/
 
     int H = 0;
     String ss = String(H);
-    send_text(3,ss);
-    send_text(3,ss);
+    //send_text3(ss);
+    //send_text3(ss);
     writeFile(SD, "/50.txt", ss.c_str()); /*SD Save*/
   }
 }
@@ -3695,8 +4877,8 @@ void effi_cal() {
 
   int num2 = N;
   String str2 = String(num2);
-  send_text(4,str2);
-  send_text(4,str2);
+  send_text4(str2);
+  send_text4(str2);
 
   writeFile(SD, "/49.txt", str2.c_str()); /*SD Save*/
 
@@ -3708,13 +4890,13 @@ void effi_cal() {
 
     int num2 = 0;
     String str2 = String(num2);
-    send_text(4,str2);
-    send_text(4,str2);
+    send_text4(str2);
+    send_text4(str2);
 
     int H = 0;
     String ss = String(H);
-    send_text(3,ss);
-    send_text(3,ss);
+    //send_text3(ss);
+    //send_text3(ss);
   }
 }
 
@@ -3872,7 +5054,7 @@ void callback(char *topic, byte *payload, unsigned int length) {
       } else if (key == "ownership") {
         ownership = kvp.value().as<String>();
 
-      } else if (key == "obbOperationId") {
+      } else if (key == "activeObbOperationId") {
         obbOperationId = kvp.value().as<String>();
 
       } else if (key == "style") {
@@ -3931,12 +5113,16 @@ void MQTT_Connect() {
   client.subscribe(recv_topic);
 }
 
-// Check whether MQTT broker is still connected
 void MQTT_Reconnect() {
-  if (!client.connected()) {
-    MQTT_Connect();  // Reconnect to MQTT broker if not connected
+  // Check if Wi-Fi is connected before attempting MQTT reconnection
+  if ((wifiData == 2) || (WiFi.status() == WL_CONNECTED)) {
+    if (!client.connected()) {
+      MQTT_Connect();  // Reconnect to MQTT broker if not connected
+    }
+    client.loop();  // Maintain MQTT connection
+  } else {
+    Serial.println("WiFi not connected. Skipping MQTT reconnect.");
   }
-  client.loop();  // Maintain MQTT connection
 }
 
 
@@ -4171,6 +5357,227 @@ void append_operator_f(String rfid) {
   Serial.println(rfid);
 }
 
+// Send Operator login timestamp
+void send_loginTS(String opRFID, String loginTS) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["loginTS"] = loginTS;
+  jsonDocument["method"] = "LINTS";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Login Timestamp : ");
+  Serial.println(loginTS);
+}
+
+// Send Operator logout timestamp
+void send_logoutTS(String opRFID, String logoutTS) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["logoutTS"] = logoutTS;
+  jsonDocument["method"] = "LOUTTS";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Logout Timestamp : ");
+  Serial.println(logoutTS);
+}
+
+// Send supervisor break start timestamp
+void send_SUBreakStartTS(String opRFID, String bStartTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bStartTime"] = bStartTime;
+  jsonDocument["method"] = "BSTAT";
+  jsonDocument["bt"] = "SU";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break start Timestamp : ");
+  Serial.println(bStartTime);
+}
+
+// Send supervisor break end timestamp
+void send_SUBreakEndTS(String opRFID, String bEndTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bEndTime"] = bEndTime;
+  jsonDocument["method"] = "BEND";
+  jsonDocument["bt"] = "SU";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break end Timestamp : ");
+  Serial.println(bEndTime);
+}
+
+// Send mechanic break start timestamp
+void send_MEBreakStartTS(String opRFID, String bStartTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bStartTime"] = bStartTime;
+  jsonDocument["method"] = "BSTAT";
+  jsonDocument["bt"] = "ME";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break start Timestamp : ");
+  Serial.println(bStartTime);
+}
+
+// Send mechanic break end timestamp
+void send_MEBreakEndTS(String opRFID, String bEndTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bEndTime"] = bEndTime;
+  jsonDocument["method"] = "BEND";
+  jsonDocument["bt"] = "ME";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break end Timestamp : ");
+  Serial.println(bEndTime);
+}
+
+// Send lunch break start timestamp
+void send_LunchBreakStartTS(String opRFID, String bStartTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bStartTime"] = bStartTime;
+  jsonDocument["method"] = "BSTAT";
+  jsonDocument["bt"] = "LB";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break start Timestamp : ");
+  Serial.println(bStartTime);
+}
+
+// Send lunch break end timestamp
+void send_LunchBreakEndTS(String opRFID, String bEndTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bEndTime"] = bEndTime;
+  jsonDocument["method"] = "BEND";
+  jsonDocument["bt"] = "LB";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break end Timestamp : ");
+  Serial.println(bEndTime);
+}
+
+// Send offstand start timestamp
+void send_OffstandStartTS(String opRFID, String bStartTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bStartTime"] = bStartTime;
+  jsonDocument["method"] = "BSTAT";
+  jsonDocument["bt"] = "OS";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break start Timestamp : ");
+  Serial.println(bStartTime);
+}
+
+// Send offstand end timestamp
+void send_OffstandEndTS(String opRFID, String bEndTime) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["opRFID"] = opRFID;
+  jsonDocument["bEndTime"] = bEndTime;
+  jsonDocument["method"] = "BEND";
+  jsonDocument["bt"] = "OS";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("OperatorRFID : ");
+  Serial.println(opRFID);
+  Serial.print("Break end Timestamp : ");
+  Serial.println(bEndTime);
+}
+
+// Send supervisor break end timestamp
+void send_SMV(String operationID, String operatorID, float SMV, String timestamp) {
+  MQTT_Reconnect();
+  StaticJsonDocument<100> jsonDocument;
+  jsonDocument["operationID"] = operationID;
+  jsonDocument["operatorID"] = operatorID;
+  jsonDocument["SMV"] = SMV;
+  jsonDocument["timestamp"] = timestamp;
+  jsonDocument["method"] = "SMV";
+
+  char jsonBuffer[256];
+  serializeJson(jsonDocument, jsonBuffer);
+
+  client.publish(send_topic, jsonBuffer, 2);  // Change the QoS parameter to 2
+  Serial.println("Published data: ");
+  Serial.print("operationID : ");
+  Serial.println(operationID);
+  Serial.print("operatorID : ");
+  Serial.println(operatorID);
+  Serial.print("SMV : ");
+  Serial.println(SMV);
+}
+
 /**** GET Functions ****/
 
 // Getting initial data at the beginning
@@ -4277,7 +5684,7 @@ String customEncode(String input) {
   for (int i = 0; i < input.length(); i++) {
     char c = input.charAt(i);
     int baseIndex = (c >= '0' && c <= '9') ? '0' : (c >= 'A' && c <= 'Z') ? 'A' - 10
-                    : 'a' - 36;
+                                                                          : 'a' - 36;
     int offset = (c - baseIndex + i * 3) % 62;  // Rotate and mix a bit
     if (offset < 10) {
       encoded += char('0' + offset);
@@ -4303,33 +5710,70 @@ String generateRandomString(int length) {
 void startTrafficLight() {
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
 
-  setLEDs(1,255,0,0);
-  setLEDs(0,255,0,0);
+  leds[0] = CRGB(255, 0, 0);
+  FastLED.show();
+  leds[1] = CRGB(255, 0, 0);
+  FastLED.show();
+  leds[2] = CRGB(255, 0, 0);
+  FastLED.show();
+  leds[3] = CRGB(255, 0, 0);
+  FastLED.show();
   delay(1000);
 
-  setLEDs(1,0,255,0);
-  setLEDs(0,0,255,0);
+  leds[0] = CRGB(0, 255, 0);
+  FastLED.show();
+  leds[1] = CRGB(0, 255, 0);
+  FastLED.show();
+  leds[2] = CRGB(0, 255, 0);
+  FastLED.show();
+  leds[3] = CRGB(0, 255, 0);
+  FastLED.show();
   delay(1000);
 
-  setLEDs(1,0,0,255);
-  setLEDs(0,0,0,255);
+  leds[0] = CRGB(0, 0, 255);
+  FastLED.show();
+  leds[1] = CRGB(0, 0, 255);
+  FastLED.show();
+  leds[2] = CRGB(0, 0, 255);
+  FastLED.show();
+  leds[3] = CRGB(0, 0, 255);
+  FastLED.show();
   delay(1000);
 
-  setLEDs(1,0,0,0);
-  setLEDs(0,0,0,0);
+  leds[0] = CRGB(0, 0, 0);
+  FastLED.show();
+  leds[1] = CRGB(0, 0, 0);
+  FastLED.show();
+  leds[2] = CRGB(0, 0, 0);
+  FastLED.show();
+  leds[3] = CRGB(0, 0, 0);
+  FastLED.show();
   delay(500);
 }
 
-void setLEDs(uint8_t top,uint8_t R,uint8_t G,uint8_t B){
-  if(top){
-  leds[0] = CRGB(R, G, B);
-  FastLED.show();
-  leds[1] = CRGB(R, G, B);
-  FastLED.show();
-  } else {
-  leds[2] = CRGB(R, G, B);
-  FastLED.show();
-  leds[3] = CRGB(R, G, B);
-  FastLED.show();
-  }
+void smvAverageCal(int newValue) {
+    // Shift the array to the left if we already have 10 values
+    if (avrSMVBuffIndex == 10) {
+        for (int i = 1; i < 10; i++) {
+            avrSMVBuff[i - 1] = avrSMVBuff[i];
+        }
+        avrSMVBuff[9] = newValue;  // Add the new value to the end
+    } else {
+        avrSMVBuff[avrSMVBuffIndex] = newValue;
+        avrSMVBuffIndex++;
+    }
+
+    // Calculate the average of the current avrSMVBuff
+    int sum = 0;
+    for (int i = 0; i < avrSMVBuffIndex; i++) {
+        sum += avrSMVBuff[i];
+    }
+
+    // Store the average in avrSMV_CT
+    smv_CT = sum / avrSMVBuffIndex;
+    smv_CAL = float(smv_CT) / float(60000);
+    //// save smv_CAL.
+   
+    Serial.print("Average smv:");
+    Serial.println(smv_CAL);
 }
